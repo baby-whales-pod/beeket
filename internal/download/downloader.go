@@ -110,7 +110,9 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 	if err != nil {
 		return "", fmt.Errorf("download: GET %q: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // response body close error is not actionable
+	}()
 
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("download: GET %q: HTTP %d", rawURL, resp.StatusCode)
@@ -155,7 +157,7 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 	for {
 		select {
 		case <-ctx.Done():
-			f.Close()
+			_ = f.Close()
 			return "", ctx.Err()
 		default:
 		}
@@ -163,7 +165,7 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
-				f.Close()
+				_ = f.Close()
 				return "", fmt.Errorf("download: write: %w", werr)
 			}
 			h.Write(buf[:n])
@@ -176,11 +178,13 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 			break
 		}
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return "", fmt.Errorf("download: read: %w", err)
 		}
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("download: close partial: %w", err)
+	}
 
 	// Atomically rename to destination.
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
