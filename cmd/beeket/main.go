@@ -43,8 +43,8 @@ func rootCmd() *cobra.Command {
 		SilenceUsage: true,
 		// Run is defined so cobra executes the command (and thus PersistentPreRun)
 		// when --about is passed with no subcommand; otherwise show help.
-		Run: func(cmd *cobra.Command, args []string) {
-			_ = cmd.Help()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
 		},
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if about {
@@ -99,7 +99,7 @@ const (
 
 // printAbout writes the project information block to stdout.
 func printAbout() {
-	fmt.Printf("beeket - Run LLM with Yzma\n")
+	fmt.Printf("beeket — Run LLM with Yzma\n")
 	fmt.Printf("Version:     %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
 	fmt.Printf("Repository:  %s\n", aboutRepo)
 	fmt.Printf("License:     %s\n", aboutLicense)
