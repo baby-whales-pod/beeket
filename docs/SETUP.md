@@ -85,34 +85,38 @@ The Yzma project ships a prebuilt library installer for every supported platform
 
 ```bash
 # Install the yzma CLI (used only to fetch the library)
-go install github.com/hybridgroup/yzma/cmd/yzma@latest
+go install github.com/hybridgroup/yzma@latest
 
-# Download the right prebuilt library for your platform + backend
+# Download the right prebuilt library for your platform + processor
 # CPU-only (works everywhere):
-yzma lib install --backend cpu
+yzma install --lib /path/to/lib --processor cpu
 
 # CUDA (Linux/Windows, requires CUDA Toolkit):
-yzma lib install --backend cuda
+yzma install --lib /path/to/lib --processor cuda
 
 # Metal (macOS Apple Silicon / Intel):
-yzma lib install --backend metal
+yzma install --lib /path/to/lib --processor metal
 
 # Vulkan (cross-platform GPU):
-yzma lib install --backend vulkan
+yzma install --lib /path/to/lib --processor vulkan
 
 # ROCm (AMD, Linux):
-yzma lib install --backend rocm
+yzma install --lib /path/to/lib --processor rocm
 ```
 
-By default the library is placed in `~/.local/share/yzma/lib/` (Linux/macOS) or `%APPDATA%\yzma\lib\` (Windows). Beeket auto-detects this path.
+Replace `/path/to/lib` with the directory where you want the shared library files installed (e.g. `~/.local/share/yzma/lib`). Alternatively, set the `YZMA_LIB` environment variable to that directory and omit `--lib`:
+
+```bash
+export YZMA_LIB=/path/to/lib
+yzma install --processor metal
+```
 
 ### Option B — Build llama.cpp from source
 
 Follow the [llama.cpp build guide](https://github.com/ggml-org/llama.cpp#build) and produce `libllama.so` (Linux), `libllama.dylib` (macOS), or `llama.dll` (Windows). Then point Beeket at it:
 
 ```bash
-export YZMA_LIB=/path/to/libllama.so   # Linux
-export YZMA_LIB=/path/to/libllama.dylib  # macOS
+export YZMA_LIB=/path/to/lib   # directory containing libllama.so / libllama.dylib
 ```
 
 ### Option C — Let Beeket auto-install it
@@ -451,7 +455,7 @@ Metal is supported out of the box on Apple Silicon (M1/M2/M3/M4) and Intel Macs 
 
 ```bash
 # Install the Metal-enabled library
-yzma lib install --backend metal
+yzma install --lib /path/to/lib --processor metal
 
 # Run with Metal
 beeketd --backend metal
@@ -468,7 +472,7 @@ beeketd --backend metal --log-level debug 2>&1 | grep -i metal
 1. Install the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (12.x recommended).
 2. Install the CUDA-enabled library:
    ```bash
-   yzma lib install --backend cuda
+   yzma install --lib /path/to/lib --processor cuda
    ```
 3. Run:
    ```bash
@@ -488,7 +492,7 @@ beeketd --backend cuda --gpu-layers 20   # offload only 20 transformer layers
 1. Install [ROCm 6+](https://rocm.docs.amd.com/en/latest/deploy/linux/index.html).
 2. Install the ROCm library:
    ```bash
-   yzma lib install --backend rocm
+   yzma install --lib /path/to/lib --processor rocm
    ```
 3. Run:
    ```bash
@@ -502,7 +506,7 @@ Vulkan works on NVIDIA, AMD, and Intel GPUs across Linux and Windows.
 1. Install the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
 2. Install the Vulkan library:
    ```bash
-   yzma lib install --backend vulkan
+   yzma install --lib /path/to/lib --processor vulkan
    ```
 3. Run:
    ```bash
@@ -529,11 +533,10 @@ The `libllama` shared library was not found. Fix:
 
 ```bash
 # Check if the library is installed
-ls ~/.local/share/yzma/lib/
+ls /path/to/lib/
 
-# Point Beeket at it explicitly
-export YZMA_LIB=/path/to/libllama.so   # Linux
-export YZMA_LIB=/path/to/libllama.dylib  # macOS
+# Point Beeket at the directory containing the library
+export YZMA_LIB=/path/to/lib
 
 # Or auto-install
 beeketd --auto-install-lib
