@@ -9,10 +9,9 @@
 ```bash
 # Install
 go install github.com/baby-whales-pod/beeket/cmd/beeket@latest
-go install github.com/baby-whales-pod/beeket/cmd/beeketd@latest
 
 # Start the server (port 11435)
-beeketd
+beeket serve
 
 # Pull a model
 beeket pull smollm2:135m
@@ -75,7 +74,7 @@ format = "text"   # text | json
 All settings can also be set via `BEEKET_*` env vars or CLI flags:
 
 ```bash
-beeketd --port 11435 --log-level debug --backend cuda
+beeket serve --port 11435 --log-level debug --backend cuda
 ```
 
 ## Built-in Aliases

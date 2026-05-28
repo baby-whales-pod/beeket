@@ -77,7 +77,7 @@ All subsequent commands assume you are in the repository root unless stated othe
 
 ## 3. Installing the Yzma / llama.cpp Shared Library
 
-Beeket uses [Yzma](https://github.com/hybridgroup/yzma) — a pure-Go FFI wrapper around `llama.cpp`. Because it loads the inference engine at runtime via `dlopen` / `LoadLibrary`, **you need the `llama.cpp` shared library on your system** before running `beeketd`.
+Beeket uses [Yzma](https://github.com/hybridgroup/yzma) — a pure-Go FFI wrapper around `llama.cpp`. Because it loads the inference engine at runtime via `dlopen` / `LoadLibrary`, **you need the `llama.cpp` shared library on your system** before running `beeket serve`.
 
 ### Option A — Use the Yzma installer (recommended)
 
@@ -121,16 +121,16 @@ export YZMA_LIB=/path/to/lib   # directory containing libllama.so / libllama.dyl
 
 ### Option C — Let Beeket auto-install it
 
-Start `beeketd` with `--auto-install-lib` and it will fetch a suitable prebuilt library on first run:
+Start `beeket serve` with `--auto-install-lib` and it will fetch a suitable prebuilt library on first run:
 
 ```bash
-beeketd --auto-install-lib
+beeket serve --auto-install-lib
 ```
 
 ### Verifying the library is found
 
 ```bash
-beeketd version
+beeket version
 # Expected: beeket 0.1.0-dev (commit ..., built ...)
 # If the library is missing you will see: "engine: load llama library: ..."
 ```
@@ -143,12 +143,11 @@ beeketd version
 # Download all Go dependencies
 go mod download
 
-# Build both binaries into the current directory
-go build -o beeketd ./cmd/beeketd
-go build -o beeket  ./cmd/beeket
+# Build the beeket binary
+go build -o beeket ./cmd/beeket
 
-# Or install them to $GOPATH/bin (must be on your $PATH)
-go install ./cmd/beeketd ./cmd/beeket
+# Or install to $GOPATH/bin (must be on your $PATH)
+go install ./cmd/beeket
 ```
 
 ### Embedding version info at build time
@@ -162,7 +161,7 @@ go build \
   -ldflags "-X github.com/baby-whales-pod/beeket/internal/version.Version=${VERSION} \
             -X github.com/baby-whales-pod/beeket/internal/version.Commit=${COMMIT} \
             -X github.com/baby-whales-pod/beeket/internal/version.BuildDate=${DATE}" \
-  -o beeketd ./cmd/beeketd
+  -o beeket ./cmd/beeket
 ```
 
 ### Running tests
@@ -254,10 +253,10 @@ Every config key has a corresponding `BEEKET_` env var:
 ### CLI flag overrides
 
 ```bash
-beeketd --port 11436 --backend cuda --log-level debug
+beeket serve --port 11436 --backend cuda --log-level debug
 ```
 
-Run `beeketd --help` for the full flag list.
+Run `beeket serve --help` for the full flag list.
 
 ---
 
@@ -315,16 +314,16 @@ beeket list
 
 ```bash
 # Start with defaults (binds to 127.0.0.1:11435)
-beeketd
+beeket serve
 
 # Custom port, expose on network (be careful — no auth in v0.1)
-beeketd --host 0.0.0.0 --port 11436
+beeket serve --host 0.0.0.0 --port 11436
 
 # JSON structured logs (useful for log aggregation)
-beeketd --log-format json
+beeket serve --log-format json
 
 # Verbose debug output
-beeketd --log-level debug
+beeket serve --log-level debug
 ```
 
 ### Verifying the server is running
@@ -349,13 +348,13 @@ curl http://127.0.0.1:11435/api/ps
 ### Running as a background service (systemd)
 
 ```ini
-# ~/.config/systemd/user/beeketd.service
+# ~/.config/systemd/user/beeket-serve.service
 [Unit]
 Description=Beeket model server
 After=network.target
 
 [Service]
-ExecStart=%h/.local/bin/beeketd
+ExecStart=%h/.local/bin/beeket serve
 Restart=on-failure
 Environment=BEEKET_LOG_FORMAT=json
 
@@ -365,8 +364,8 @@ WantedBy=default.target
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now beeketd
-journalctl --user -fu beeketd
+systemctl --user enable --now beeket-serve
+journalctl --user -fu beeket-serve
 ```
 
 ---
@@ -384,7 +383,7 @@ beeket run smollm2:135m --stream -p "Write a haiku about Go."
 
 ### Pull and run in one command
 
-If `beeketd` is running, `beeket run` will automatically pull the model if it is not already installed:
+If `beeket serve` is running, `beeket run` will automatically pull the model if it is not already installed:
 
 ```bash
 beeket run gemma3:1b -p "Hello, world!"
@@ -458,13 +457,13 @@ Metal is supported out of the box on Apple Silicon (M1/M2/M3/M4) and Intel Macs 
 yzma install --lib /path/to/lib --processor metal
 
 # Run with Metal
-beeketd --backend metal
+beeket serve --backend metal
 ```
 
 Verify Metal is being used:
 
 ```bash
-beeketd --backend metal --log-level debug 2>&1 | grep -i metal
+beeket serve --backend metal --log-level debug 2>&1 | grep -i metal
 ```
 
 ### Linux — NVIDIA CUDA
@@ -476,15 +475,15 @@ beeketd --backend metal --log-level debug 2>&1 | grep -i metal
    ```
 3. Run:
    ```bash
-   beeketd --backend cuda
+   beeket serve --backend cuda
    # or
-   BEEKET_BACKEND=cuda beeketd
+   BEEKET_BACKEND=cuda beeket serve
    ```
 
 Control GPU layer offload (default `-1` = offload everything):
 
 ```bash
-beeketd --backend cuda --gpu-layers 20   # offload only 20 transformer layers
+beeket serve --backend cuda --gpu-layers 20   # offload only 20 transformer layers
 ```
 
 ### Linux — AMD ROCm
@@ -496,7 +495,7 @@ beeketd --backend cuda --gpu-layers 20   # offload only 20 transformer layers
    ```
 3. Run:
    ```bash
-   BEEKET_BACKEND=rocm beeketd
+   BEEKET_BACKEND=rocm beeket serve
    ```
 
 ### Cross-platform — Vulkan
@@ -510,7 +509,7 @@ Vulkan works on NVIDIA, AMD, and Intel GPUs across Linux and Windows.
    ```
 3. Run:
    ```bash
-   beeketd --backend vulkan
+   beeket serve --backend vulkan
    ```
 
 ### Checking which backend is active
@@ -520,7 +519,7 @@ curl -s http://127.0.0.1:11435/api/version | jq .
 # {"version":"0.1.0-dev"}
 
 # More detail in the startup logs:
-beeketd --log-level debug 2>&1 | head -20
+beeket serve --log-level debug 2>&1 | head -20
 ```
 
 ---
@@ -539,7 +538,7 @@ ls /path/to/lib/
 export YZMA_LIB=/path/to/lib
 
 # Or auto-install
-beeketd --auto-install-lib
+beeket serve --auto-install-lib
 ```
 
 ### `go: requires go >= 1.22`
@@ -556,7 +555,7 @@ lsof -i :11435
 kill <PID>
 
 # Or start on a different port
-beeketd --port 11436
+beeket serve --port 11436
 ```
 
 ### `model smollm2:135m not found`
@@ -588,7 +587,7 @@ chmod -R u+rwX ~/.local/share/beeket/
 Or point Beeket at a writable directory:
 
 ```bash
-BEEKET_DATA_DIR=/tmp/beeket-data beeketd
+BEEKET_DATA_DIR=/tmp/beeket-data beeket serve
 ```
 
 ### macOS: `Library not loaded: @rpath/libllama.dylib`
@@ -610,10 +609,10 @@ sudo ldconfig
 
 ### Getting more information
 
-Start `beeketd` with `--log-level debug` to see detailed startup, model loading, and request processing logs:
+Start `beeket serve` with `--log-level debug` to see detailed startup, model loading, and request processing logs:
 
 ```bash
-beeketd --log-level debug --log-format json 2>&1 | jq .
+beeket serve --log-level debug --log-format json 2>&1 | jq .
 ```
 
 Open an issue at https://github.com/baby-whales-pod/beeket/issues with the debug log output if you are stuck.

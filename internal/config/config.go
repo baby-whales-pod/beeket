@@ -1,4 +1,4 @@
-// Package config defines the layered configuration for beeketd.
+// Package config defines the layered configuration for beeket.
 // Configuration sources (in increasing priority order):
 //  1. Compiled-in defaults
 //  2. Config file (~/.config/beeket/beeket.toml)
@@ -16,7 +16,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config is the root configuration structure for beeketd.
+// Config is the root configuration structure for beeket.
 type Config struct {
 	Server   ServerConfig   `toml:"server"`
 	Paths    PathsConfig    `toml:"paths"`
