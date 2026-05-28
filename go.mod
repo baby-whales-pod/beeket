@@ -1,10 +1,10 @@
 module github.com/baby-whales-pod/beeket
 
-go 1.22
+go 1.24.4
 
 require (
 	github.com/BurntSushi/toml v1.4.0
-	github.com/hybridgroup/yzma v1.14.1
+	github.com/hybridgroup/yzma v1.10.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 )

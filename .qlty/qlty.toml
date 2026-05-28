@@ -13,6 +13,10 @@ test_patterns = [
   "**/*_test.go"
 ]
 
+[[source]]
+name    = "default"
+default = true
+
 # --- Linters ---
 
 [[plugin]]
@@ -26,5 +30,5 @@ name    = "osv-scanner"   # dependency vulnerability (SCA)
 version = "2.0.3"
 
 [[plugin]]
-name    = "gitleaks"         # secrets / credential detection
-version = "8.29.1"
+name    = "trufflehog"       # secrets / credential detection
+version = "3.82.12"
