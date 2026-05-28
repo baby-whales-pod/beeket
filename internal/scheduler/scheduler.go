@@ -13,17 +13,17 @@ import (
 )
 
 const (
-	queueDepth    = 32
-	loadGrace     = 200 * time.Millisecond
+	queueDepth = 32
+	loadGrace  = 200 * time.Millisecond
 )
 
 // Request represents a single inference request enqueued in a worker.
 type Request struct {
-	ctx     context.Context
-	prompt  string
-	opts    engine.GenerateOptions
-	out     func(piece string) error
-	errCh   chan error
+	ctx    context.Context
+	prompt string
+	opts   engine.GenerateOptions
+	out    func(piece string) error
+	errCh  chan error
 }
 
 // Worker owns a loaded model and its inference context, serving requests sequentially.

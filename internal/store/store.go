@@ -61,11 +61,14 @@ func (s *Store) WriteManifest(name, tag string, v any) error {
 		return fmt.Errorf("store: create tmp manifest: %w", err)
 	}
 	if err := json.NewEncoder(f).Encode(v); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("store: encode manifest: %w", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("store: close manifest tmp: %w", err)
+	}
 	return os.Rename(tmp, dest)
 }
 
@@ -134,11 +137,14 @@ func (s *Store) AtomicWriteBlob(digest string, write func(io.Writer) error) erro
 		return fmt.Errorf("store: create blob tmp: %w", err)
 	}
 	if err := write(f); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("store: write blob: %w", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("store: close blob tmp: %w", err)
+	}
 	return os.Rename(tmp, dest)
 }
 

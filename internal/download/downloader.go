@@ -145,7 +145,9 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 		existing, err := os.Open(partialPath)
 		if err == nil {
 			io.Copy(h, existing) //nolint:errcheck
-			existing.Close()
+			if err := existing.Close(); err != nil {
+				return "", fmt.Errorf("download: close partial for hashing: %w", err)
+			}
 		}
 	}
 

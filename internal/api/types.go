@@ -31,9 +31,9 @@ type ShowRequest struct {
 
 // ShowResponse is returned by POST /api/show.
 type ShowResponse struct {
-	Name     string            `json:"name"`
-	Details  ModelDetails      `json:"details"`
-	ModelInfo map[string]any   `json:"model_info,omitempty"`
+	Name      string         `json:"name"`
+	Details   ModelDetails   `json:"details"`
+	ModelInfo map[string]any `json:"model_info,omitempty"`
 }
 
 // ModelDetails is embedded in list and show responses.
@@ -70,8 +70,8 @@ type CopyRequest struct {
 
 // Message is a chat message (role + content).
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string   `json:"role"`
+	Content string   `json:"content"`
 	Images  []string `json:"images,omitempty"` // base64-encoded
 }
 
@@ -98,15 +98,15 @@ type GenerateRequest struct {
 
 // GenerateResponse is one NDJSON line for /api/generate.
 type GenerateResponse struct {
-	Model              string `json:"model"`
-	CreatedAt          string `json:"created_at"`
-	Response           string `json:"response"`
-	Done               bool   `json:"done"`
-	TotalDuration      int64  `json:"total_duration,omitempty"`
-	LoadDuration       int64  `json:"load_duration,omitempty"`
-	PromptEvalCount    int    `json:"prompt_eval_count,omitempty"`
-	EvalCount          int    `json:"eval_count,omitempty"`
-	EvalDuration       int64  `json:"eval_duration,omitempty"`
+	Model           string `json:"model"`
+	CreatedAt       string `json:"created_at"`
+	Response        string `json:"response"`
+	Done            bool   `json:"done"`
+	TotalDuration   int64  `json:"total_duration,omitempty"`
+	LoadDuration    int64  `json:"load_duration,omitempty"`
+	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
+	EvalCount       int    `json:"eval_count,omitempty"`
+	EvalDuration    int64  `json:"eval_duration,omitempty"`
 }
 
 // ChatRequest is the body for POST /api/chat.
@@ -119,19 +119,19 @@ type ChatRequest struct {
 
 // ChatResponse is one NDJSON line for /api/chat.
 type ChatResponse struct {
-	Model     string  `json:"model"`
-	CreatedAt string  `json:"created_at"`
-	Message   Message `json:"message"`
-	Done      bool    `json:"done"`
-	TotalDuration   int64 `json:"total_duration,omitempty"`
-	EvalCount       int   `json:"eval_count,omitempty"`
-	EvalDuration    int64 `json:"eval_duration,omitempty"`
+	Model         string  `json:"model"`
+	CreatedAt     string  `json:"created_at"`
+	Message       Message `json:"message"`
+	Done          bool    `json:"done"`
+	TotalDuration int64   `json:"total_duration,omitempty"`
+	EvalCount     int     `json:"eval_count,omitempty"`
+	EvalDuration  int64   `json:"eval_duration,omitempty"`
 }
 
 // EmbeddingsRequest is the body for POST /api/embeddings.
 type EmbeddingsRequest struct {
-	Model  string   `json:"model"`
-	Input  any      `json:"input"` // string or []string
+	Model string `json:"model"`
+	Input any    `json:"input"` // string or []string
 }
 
 // EmbeddingsResponse is returned by POST /api/embeddings.

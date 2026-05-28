@@ -462,5 +462,3 @@ func detailsFromManifest(mf *models.Manifest) ModelDetails {
 		Format:            mf.Details.Format,
 	}
 }
-
-
