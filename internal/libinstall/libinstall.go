@@ -20,7 +20,7 @@ type Options struct {
 	// LibDir is the target directory (must be non-empty, already resolved).
 	LibDir string
 	// Backend is "auto" or an explicit processor name (cpu|cuda|metal|vulkan|rocm).
-	// When "auto", DetectBackend() is called to resolve it.
+	// When "auto" or empty, DetectBackend(ctx) is called to resolve it.
 	Backend string
 	// Version is passed to `yzma install --version`. Empty means latest.
 	Version string
@@ -34,12 +34,20 @@ type Options struct {
 	Stderr io.Writer
 }
 
-// libNames is the ordered list of shared-library filenames to look for.
-var libNames = []string{
+// llamaLibNames are the expected llama.cpp shared-library filenames.
+var llamaLibNames = []string{
 	"libllama.so",    // Linux
 	"libllama.dylib", // macOS
 	"llama.dll",      // Windows
-	"libllama.so.0",  // some Linux distros versioned
+	"libllama.so.0",  // some Linux distros use a versioned soname
+}
+
+// mtmdLibNames are the expected multimodal (libmtmd) shared-library filenames.
+// Both llama and mtmd must be present for a complete install.
+var mtmdLibNames = []string{
+	"libmtmd.so",    // Linux
+	"libmtmd.dylib", // macOS
+	"mtmd.dll",      // Windows
 }
 
 // Ensure makes sure a llama.cpp shared library exists in opts.LibDir,
@@ -58,7 +66,7 @@ func Ensure(ctx context.Context, opts Options) (backend string, err error) {
 	// Resolve backend before anything else so we log it early.
 	backend = opts.Backend
 	if backend == "" || backend == "auto" {
-		backend = DetectBackend()
+		backend = DetectBackend(ctx)
 		log.Info("detected backend", "backend", backend,
 			"goos", runtime.GOOS, "goarch", runtime.GOARCH)
 	} else {
@@ -67,12 +75,15 @@ func Ensure(ctx context.Context, opts Options) (backend string, err error) {
 
 	log.Info("lib dir", "path", opts.LibDir)
 
-	// Fast pre-check: is the library already installed?
+	// Fast pre-check: are both llama and mtmd libraries already installed?
 	if !opts.Upgrade {
-		if existing, found := findLibrary(opts.LibDir); found {
-			log.Info("llama.cpp library already installed, skipping",
-				"file", existing)
-			return backend, nil
+		if llamaPath, ok := findOneOf(opts.LibDir, llamaLibNames); ok {
+			if _, mtmdOK := findOneOf(opts.LibDir, mtmdLibNames); mtmdOK {
+				log.Info("llama.cpp libraries already installed, skipping",
+					"llama", llamaPath)
+				return backend, nil
+			}
+			log.Info("libllama present but libmtmd missing — installing")
 		}
 	}
 
@@ -97,12 +108,19 @@ func Ensure(ctx context.Context, opts Options) (backend string, err error) {
 		args = append(args, "--upgrade")
 	}
 
-	log.Info("running", "cmd", yzmaPath+" "+strings.Join(args, " "))
+	log.Info("running yzma", "path", yzmaPath, "args", args)
 
 	cmd := exec.CommandContext(ctx, yzmaPath, args...)
 
 	// Propagate YZMA_LIB to child so yzma's own defaults align with ours.
-	cmd.Env = append(os.Environ(), "YZMA_LIB="+opts.LibDir)
+	// Filter any existing YZMA_LIB entry first to avoid duplicates.
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "YZMA_LIB=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = append(env, "YZMA_LIB="+opts.LibDir)
 
 	// Wire up output streams.
 	cmd.Stdout = opts.Stdout
@@ -122,16 +140,22 @@ func Ensure(ctx context.Context, opts Options) (backend string, err error) {
 	return backend, nil
 }
 
-// findLibrary checks whether any of the expected shared library filenames
-// exist in dir. Returns the found path and true, or ("", false).
-func findLibrary(dir string) (string, bool) {
-	for _, name := range libNames {
+// findOneOf checks whether any filename in names exists in dir.
+// Returns the first found path and true, or ("", false).
+func findOneOf(dir string, names []string) (string, bool) {
+	for _, name := range names {
 		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			return p, true
 		}
 	}
 	return "", false
+}
+
+// findLibrary checks whether a llama.cpp core library exists in dir.
+// Kept for backward-compatibility with existing tests.
+func findLibrary(dir string) (string, bool) {
+	return findOneOf(dir, llamaLibNames)
 }
 
 // resolveYzma locates the yzma CLI binary using the following priority:

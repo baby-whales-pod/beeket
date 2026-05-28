@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Config is the root configuration structure for beeketd.
@@ -94,7 +95,7 @@ func Defaults() Config {
 //  1. --lib-dir flag / cfg.Paths.LibDir (already set by caller from flag)
 //  2. BEEKET_LIB_DIR env
 //  3. YZMA_LIB env (read-only)
-//  4. <data-dir>/lib  (default for --auto-install-lib)
+//  4. <data-dir>/lib  (default when no other source is set)
 func ResolveLibDir(cfg *Config) string {
 	if cfg.Paths.LibDir != "" {
 		return cfg.Paths.LibDir
@@ -130,20 +131,63 @@ func resolveDataDir(cfg *Config) string {
 // ApplyEnv overlays environment-variable overrides onto cfg.
 // Flag-level overrides are applied by the cobra command after this.
 func ApplyEnv(cfg *Config) {
+	// Server
 	if v := os.Getenv("BEEKET_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
+	if v := os.Getenv("BEEKET_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Port = n
+		}
+	}
+
+	// Paths — also reflect into cfg.Paths so callers don't need to re-read env.
+	if v := os.Getenv("BEEKET_DATA_DIR"); v != "" {
+		cfg.Paths.DataDir = v
+	}
+	if v := os.Getenv("BEEKET_LIB_DIR"); v != "" {
+		cfg.Paths.LibDir = v
+	}
+
+	// Runtime
 	if v := os.Getenv("BEEKET_BACKEND"); v != "" {
 		cfg.Runtime.Backend = v
 	}
+	if v := os.Getenv("BEEKET_GPU_LAYERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.GPULayers = n
+		}
+	}
+	if v := os.Getenv("BEEKET_NUM_PARALLEL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.NumParallel = n
+		}
+	}
+	if v := os.Getenv("BEEKET_MAX_LOADED_MODELS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.MaxLoaded = n
+		}
+	}
+	if v := os.Getenv("BEEKET_KEEP_ALIVE"); v != "" {
+		cfg.Runtime.KeepAlive = v
+	}
+	if v := os.Getenv("BEEKET_CONTEXT_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Runtime.ContextSize = n
+		}
+	}
+	// Explicit false/0 must disable the flag; non-empty string that is neither
+	// truthy nor falsy is intentionally ignored (preserves current value).
+	if v := os.Getenv("BEEKET_AUTO_INSTALL_LIB"); v != "" {
+		cfg.Runtime.AutoInstallLib = v == "true" || v == "1"
+	}
+
+	// Log
 	if v := os.Getenv("BEEKET_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
 	if v := os.Getenv("BEEKET_LOG_FORMAT"); v != "" {
 		cfg.Log.Format = v
-	}
-	if v := os.Getenv("BEEKET_AUTO_INSTALL_LIB"); v == "true" || v == "1" {
-		cfg.Runtime.AutoInstallLib = true
 	}
 }
 

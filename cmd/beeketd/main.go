@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -40,9 +41,10 @@ type flagValues struct {
 	contextSize int
 
 	// auto-install-lib flags
-	autoInstallLib bool
-	libVersion     string
-	libUpgrade     bool
+	autoInstallLib    bool
+	libVersion        string
+	libUpgrade        bool
+	libInstallTimeout time.Duration
 
 	logLevel  string
 	logFormat string
@@ -64,21 +66,21 @@ REST API on 127.0.0.1:11435 by default.`,
 		},
 	}
 
-	// Server flags
-	cmd.Flags().StringVar(&fv.host, "host", "", "bind address (default 127.0.0.1)")
-	cmd.Flags().IntVar(&fv.port, "port", 0, "listen port (default 11435)")
+	// Server flags — use real defaults so --help is unambiguous.
+	cmd.Flags().StringVar(&fv.host, "host", "127.0.0.1", "bind address")
+	cmd.Flags().IntVar(&fv.port, "port", 11435, "listen port")
 
 	// Path flags
 	cmd.Flags().StringVar(&fv.dataDir, "data-dir", "", "data directory (default $XDG_DATA_HOME/beeket)")
 	cmd.Flags().StringVar(&fv.libDir, "lib-dir", "", "directory containing the llama.cpp shared library")
 
-	// Runtime flags
-	cmd.Flags().StringVar(&fv.backend, "backend", "", "processor backend: auto|cpu|cuda|metal|vulkan|rocm (default auto)")
-	cmd.Flags().IntVar(&fv.gpuLayers, "gpu-layers", 0, "GPU layers to offload; -1 = all (default -1)")
-	cmd.Flags().IntVar(&fv.numParallel, "num-parallel", 0, "parallel inference slots per model (default 1)")
-	cmd.Flags().IntVar(&fv.maxLoaded, "max-loaded-models", 0, "max models held in memory (default 3)")
-	cmd.Flags().StringVar(&fv.keepAlive, "keep-alive", "", "model idle timeout (default 5m)")
-	cmd.Flags().IntVar(&fv.contextSize, "context-size", 0, "default context window in tokens (default 4096)")
+	// Runtime flags — use real defaults.
+	cmd.Flags().StringVar(&fv.backend, "backend", "auto", "processor backend: auto|cpu|cuda|metal|vulkan|rocm")
+	cmd.Flags().IntVar(&fv.gpuLayers, "gpu-layers", -1, "GPU layers to offload; -1 = all")
+	cmd.Flags().IntVar(&fv.numParallel, "num-parallel", 1, "parallel inference slots per model")
+	cmd.Flags().IntVar(&fv.maxLoaded, "max-loaded-models", 3, "max models held in memory")
+	cmd.Flags().StringVar(&fv.keepAlive, "keep-alive", "5m", "model idle timeout")
+	cmd.Flags().IntVar(&fv.contextSize, "context-size", 4096, "default context window in tokens")
 
 	// auto-install-lib flags
 	cmd.Flags().BoolVar(&fv.autoInstallLib, "auto-install-lib", false,
@@ -87,10 +89,12 @@ REST API on 127.0.0.1:11435 by default.`,
 		"llama.cpp version to install (default: latest); only used with --auto-install-lib")
 	cmd.Flags().BoolVar(&fv.libUpgrade, "lib-upgrade", false,
 		"force reinstall of the library even if already present; only used with --auto-install-lib")
+	cmd.Flags().DurationVar(&fv.libInstallTimeout, "lib-install-timeout", 10*time.Minute,
+		"maximum time to wait for the library download; only used with --auto-install-lib")
 
 	// Log flags
-	cmd.Flags().StringVar(&fv.logLevel, "log-level", "", "log level: debug|info|warn|error (default info)")
-	cmd.Flags().StringVar(&fv.logFormat, "log-format", "", "log format: text|json (default text)")
+	cmd.Flags().StringVar(&fv.logLevel, "log-level", "info", "log level: debug|info|warn|error")
+	cmd.Flags().StringVar(&fv.logFormat, "log-format", "text", "log format: text|json")
 
 	// version subcommand
 	cmd.AddCommand(newVersionCmd())
@@ -115,17 +119,29 @@ func run(cmd *cobra.Command, fv flagValues) error {
 
 	log.Info("beeketd starting", "version", version.Version, "commit", version.Commit)
 
-	// 3. Resolve lib dir (used by auto-install and engine init).
+	// 3. Set up signal handling early so CTRL+C is caught during the
+	//    (potentially long) library download, not just after it.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+	go func() {
+		sig := <-quit
+		log.Info("received signal, shutting down", "signal", sig.String())
+		rootCancel()
+	}()
+
+	// 4. Resolve lib dir (used by auto-install and engine init).
 	libDir := config.ResolveLibDir(&cfg)
 
-	// 4. Auto-install the llama.cpp shared library if requested.
+	// 5. Auto-install the llama.cpp shared library if requested.
 	if cfg.Runtime.AutoInstallLib {
 		log.Info("--auto-install-lib enabled")
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		installCtx, installCancel := context.WithTimeout(rootCtx, fv.libInstallTimeout)
+		defer installCancel()
 
-		resolvedBackend, err := libinstall.Ensure(ctx, libinstall.Options{
+		resolvedBackend, err := libinstall.Ensure(installCtx, libinstall.Options{
 			LibDir:  libDir,
 			Backend: cfg.Runtime.Backend,
 			Version: cfg.Runtime.LibVersion,
@@ -154,24 +170,26 @@ func run(cmd *cobra.Command, fv flagValues) error {
 			"lib_dir", libDir)
 	}
 
-	// 5. TODO(v0.1): Initialise the engine, model manager, scheduler, and
+	// 6. TODO(v0.1): Initialise the engine, model manager, scheduler, and
 	//    HTTP server here once those packages exist. For now we print a startup
 	//    banner so the binary is functional enough to test the flag wiring.
 	log.Info("listening (stub — engine not yet implemented)",
 		"host", cfg.Server.Host,
 		"port", cfg.Server.Port)
 
-	// Wait for SIGINT / SIGTERM.
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	log.Info("shutting down", "signal", sig.String())
-
+	// Wait for cancellation (triggered by SIGINT/SIGTERM in the goroutine above).
+	<-rootCtx.Done()
+	log.Info("shutdown complete")
 	return nil
 }
 
 // applyFlags overlays the cobra flag values onto cfg, skipping any flag that
-// was not explicitly provided by the user (so defaults and env vars win).
+// was not explicitly provided by the user (so env vars win when flags are at
+// their default values but were not explicitly set on the command line).
+//
+// Note: now that cobra flags carry real defaults (not zero sentinels), we use
+// cmd.Flags().Changed() to distinguish "user explicitly set this" from
+// "cobra applied the default".
 func applyFlags(cfg *config.Config, cmd *cobra.Command, fv flagValues) {
 	if cmd.Flags().Changed("host") {
 		cfg.Server.Host = fv.host
