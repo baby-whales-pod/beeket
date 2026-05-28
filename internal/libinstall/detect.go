@@ -2,6 +2,7 @@ package libinstall
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"runtime"
 )
@@ -64,18 +65,13 @@ func detectBackend(ctx context.Context, goos, goarch string, p probes) string {
 //   - /proc/driver/nvidia/version exists (Linux kernel module loaded — zero process spawn)
 //   - `nvidia-smi -L` exits 0
 func hasNVIDIA(ctx context.Context) bool {
-	// Fast kernel-module check (Linux only, zero process spawn).
-	// We avoid os.Stat importing "os" into this file; use exec which is already imported.
-	if _, err := exec.LookPath("nvidia-smi"); err == nil {
-		cmd := exec.CommandContext(ctx, "nvidia-smi", "-L")
-		if cmd.Run() == nil {
-			return true
-		}
+	// Fast kernel-module check (Linux only, zero process spawn, no subprocess).
+	if _, err := os.Stat("/proc/driver/nvidia/version"); err == nil {
+		return true
 	}
-	// Fallback: check kernel module sysfs node directly.
-	check := exec.CommandContext(ctx, "sh", "-c",
-		"test -e /proc/driver/nvidia/version")
-	return check.Run() == nil
+	// Fallback: nvidia-smi is available on Linux and Windows.
+	cmd := exec.CommandContext(ctx, "nvidia-smi", "-L")
+	return cmd.Run() == nil
 }
 
 // hasROCm reports whether an AMD ROCm stack is present.
