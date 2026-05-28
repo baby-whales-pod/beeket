@@ -41,7 +41,9 @@ func rootCmd() *cobra.Command {
 		Use:          "beeket",
 		Short:        "Beeket — manage and run GGUF models",
 		SilenceUsage: true,
-		// Run is defined so cobra executes the command (and thus PersistentPreRun)
+		// Setting Version enables cobra's built-in --version / -v flags.
+		Version: version.String(),
+		// RunE is defined so cobra executes the command (and thus PersistentPreRun)
 		// when --about is passed with no subcommand; otherwise show help.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
@@ -53,6 +55,9 @@ func rootCmd() *cobra.Command {
 			}
 		},
 	}
+	// Override the default template so the output matches `beeket version`
+	// exactly (cobra's default would print "beeket version <semver>").
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.PersistentFlags().StringVar(&serverURL, "server", "http://127.0.0.1:11435", "server URL for client commands")
 	root.PersistentFlags().BoolVar(&about, "about", false, "print project information and exit")
 
