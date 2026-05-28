@@ -30,4 +30,5 @@ name    = "osv-scanner"   # dependency vulnerability (SCA)
 version = "2.0.3"
 
 [[plugin]]
-name = "trufflehog"       # secrets / credential detection
+name    = "trufflehog"       # secrets / credential detection
+version = "3.82.12"
