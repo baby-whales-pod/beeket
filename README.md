@@ -9,7 +9,6 @@
 ```bash
 # Install
 go install github.com/baby-whales-pod/beeket/cmd/beeket@latest
-go install github.com/baby-whales-pod/beeket/cmd/beeket@latest
 
 # Start the server (port 11435)
 beeket serve
