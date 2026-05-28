@@ -3,7 +3,9 @@ config_version = "0"
 # Exclude generated, vendored, and test-fixture paths.
 exclude_patterns = [
   "**/vendor/**",
-  "**/.git/**"
+  "**/testdata/**",
+  "**/dist/**",
+  "**/generated/**"
 ]
 
 # Mark Go test files so qlty reports them separately from application code.
@@ -11,22 +13,17 @@ test_patterns = [
   "**/*_test.go"
 ]
 
-[[source]]
-name    = "default"
-default = true
-
 # --- Linters ---
 
 [[plugin]]
-name = "golangci-lint"
-
-[[plugin]]
-name = "gofmt"
+name    = "golangci-lint"
+version = "2.6.2"
 
 # --- Security scanning ---
 
 [[plugin]]
-name = "osv-scanner"   # dependency vulnerability (SCA)
+name    = "osv-scanner"   # dependency vulnerability (SCA)
+version = "2.0.3"
 
 [[plugin]]
-name = "gitleaks"      # secrets / credential detection
+name = "gitleaks"         # secrets / credential detection
