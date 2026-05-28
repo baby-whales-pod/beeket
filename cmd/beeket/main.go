@@ -35,13 +35,26 @@ func main() {
 
 func rootCmd() *cobra.Command {
 	var serverURL string
+	var about bool
 
 	root := &cobra.Command{
 		Use:          "beeket",
 		Short:        "Beeket — manage and run GGUF models",
 		SilenceUsage: true,
+		// Run is defined so cobra executes the command (and thus PersistentPreRun)
+		// when --about is passed with no subcommand; otherwise show help.
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if about {
+				printAbout()
+				os.Exit(0)
+			}
+		},
 	}
 	root.PersistentFlags().StringVar(&serverURL, "server", "http://127.0.0.1:11435", "server URL for client commands")
+	root.PersistentFlags().BoolVar(&about, "about", false, "print project information and exit")
 
 	newClient := func() *client.Client {
 		return client.New(serverURL)
@@ -49,6 +62,7 @@ func rootCmd() *cobra.Command {
 
 	root.AddCommand(
 		versionCmd(),
+		aboutCmd(),
 		serveCmd(),
 		pullCmd(newClient),
 		listCmd(newClient),
@@ -70,6 +84,33 @@ func versionCmd() *cobra.Command {
 		Short: "Print version",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println(version.String())
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// about
+// ---------------------------------------------------------------------------
+
+const (
+	aboutRepo    = "https://github.com/baby-whales-pod/beeket"
+	aboutLicense = "MIT"
+)
+
+// printAbout writes the project information block to stdout.
+func printAbout() {
+	fmt.Printf("beeket — Run LLM with Yzma\n")
+	fmt.Printf("Version:     %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
+	fmt.Printf("Repository:  %s\n", aboutRepo)
+	fmt.Printf("License:     %s\n", aboutLicense)
+}
+
+func aboutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "about",
+		Short: "Print project information",
+		Run: func(cmd *cobra.Command, args []string) {
+			printAbout()
 		},
 	}
 }
