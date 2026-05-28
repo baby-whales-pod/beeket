@@ -5,16 +5,16 @@ Shell scripts for manually testing the Beeket chat completion API with `curl` an
 ## Prerequisites
 
 - `curl` and `jq` installed
-- Beeket server running (`beeket serve` or `beeketd`)
-- At least one model pulled (e.g. `beeket pull llama3.2`)
+- Beeket server running (`beeketd`)
+- At least one model pulled (e.g. `beeket pull smollm2:135m`)
 
 ## Environment variables
 
-| Variable       | Default     | Description                          |
-|----------------|-------------|--------------------------------------|
-| `BEEKET_HOST`  | `localhost` | Hostname or IP of the Beeket server  |
-| `BEEKET_PORT`  | `11435`     | Port the Beeket server listens on    |
-| `MODEL`        | `llama3.2`  | Model name to use for inference      |
+| Variable       | Default       | Description                          |
+|----------------|---------------|--------------------------------------|
+| `BEEKET_HOST`  | `127.0.0.1`   | Hostname or IP of the Beeket server  |
+| `BEEKET_PORT`  | `11435`       | Port the Beeket server listens on    |
+| `MODEL`        | `smollm2:135m`| Model name to use for inference      |
 
 ## Scripts
 
@@ -30,7 +30,7 @@ Sample output:
 
 ```json
 {
-  "model": "llama3.2",
+  "model": "smollm2:135m",
   "created_at": "2024-01-01T00:00:00Z",
   "message": {
     "role": "assistant",
@@ -69,7 +69,7 @@ Same as `chat-system.sh` with streaming enabled.
 
 ```bash
 MODEL=mistral ./samples/chat-simple.sh
-BEEKET_HOST=192.168.1.10 MODEL=llama3.2 ./samples/chat-system.sh
+BEEKET_HOST=192.168.1.10 MODEL=smollm2:135m ./samples/chat-system.sh
 ```
 
 ## API reference
