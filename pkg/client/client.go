@@ -65,7 +65,9 @@ func (c *Client) Pull(ctx context.Context, name string, progress func(status, di
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // response body close error is not actionable
+	}()
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -91,7 +93,9 @@ func (c *Client) List(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck
+	}()
 	var r struct {
 		Models []ModelInfo `json:"models"`
 	}
@@ -108,7 +112,9 @@ func (c *Client) Show(ctx context.Context, name string) (*ShowResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck
+	}()
 	var r ShowResponse
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return nil, err

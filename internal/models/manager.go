@@ -13,27 +13,27 @@ import (
 
 // Details holds metadata about a model extracted from its GGUF header.
 type Details struct {
-	Family             string `json:"family"`
-	ParameterSize      string `json:"parameter_size"`
-	QuantizationLevel  string `json:"quantization_level"`
-	ContextLength      int    `json:"context_length"`
-	EmbeddingLength    int    `json:"embedding_length,omitempty"`
-	Format             string `json:"format"`
-	HasVision          bool   `json:"has_vision,omitempty"`
-	HasEmbeddings      bool   `json:"has_embeddings,omitempty"`
-	ChatTemplate       string `json:"chat_template,omitempty"`
+	Family            string `json:"family"`
+	ParameterSize     string `json:"parameter_size"`
+	QuantizationLevel string `json:"quantization_level"`
+	ContextLength     int    `json:"context_length"`
+	EmbeddingLength   int    `json:"embedding_length,omitempty"`
+	Format            string `json:"format"`
+	HasVision         bool   `json:"has_vision,omitempty"`
+	HasEmbeddings     bool   `json:"has_embeddings,omitempty"`
+	ChatTemplate      string `json:"chat_template,omitempty"`
 }
 
 // Manifest is the on-disk record for a pulled model.
 type Manifest struct {
-	Name       string    `json:"name"`
-	Tag        string    `json:"tag"`
-	Digest     string    `json:"digest"`      // hex SHA-256 of the GGUF blob
-	MMProjDigest string  `json:"mmproj_digest,omitempty"`
-	Size       int64     `json:"size"`
-	Source     string    `json:"source"`      // original pull URL / HF ref
-	ModifiedAt time.Time `json:"modified_at"`
-	Details    Details   `json:"details"`
+	Name         string    `json:"name"`
+	Tag          string    `json:"tag"`
+	Digest       string    `json:"digest"` // hex SHA-256 of the GGUF blob
+	MMProjDigest string    `json:"mmproj_digest,omitempty"`
+	Size         int64     `json:"size"`
+	Source       string    `json:"source"` // original pull URL / HF ref
+	ModifiedAt   time.Time `json:"modified_at"`
+	Details      Details   `json:"details"`
 }
 
 // FullName returns "name:tag".

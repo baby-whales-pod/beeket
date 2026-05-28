@@ -141,7 +141,7 @@ func buildSampler(opts SamplerOptions) llama.Sampler {
 
 // Free releases the session's FFI resources.
 func (s *Session) Free() {
-	llama.Free(s.ctx)     //nolint:errcheck
+	llama.Free(s.ctx) //nolint:errcheck
 }
 
 // -------------------------------------------------------------------

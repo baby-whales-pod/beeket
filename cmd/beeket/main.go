@@ -384,9 +384,9 @@ func listCmd(newClient func() *client.Client) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSIZE\tQUANT\tMODIFIED")
+			_, _ = fmt.Fprintln(tw, "NAME\tSIZE\tQUANT\tMODIFIED") //nolint:errcheck // stdout write errors are unrecoverable in a CLI
 			for _, m := range mods {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", //nolint:errcheck
 					m.Name,
 					humanBytes(m.Size),
 					m.Details.QuantizationLevel,
@@ -478,9 +478,9 @@ func psCmd(newClient func() *client.Client) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "NAME\tSIZE\tLAST USED")
+			_, _ = fmt.Fprintln(tw, "NAME\tSIZE\tLAST USED") //nolint:errcheck // stdout write errors are unrecoverable in a CLI
 			for _, m := range mods {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", //nolint:errcheck
 					m.Name,
 					humanBytes(m.Size),
 					m.LastUsed.Format(time.RFC3339),

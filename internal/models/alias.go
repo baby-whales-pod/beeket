@@ -3,10 +3,10 @@ package models
 
 // AliasEntry maps a short name to a (name, tag, source) tuple.
 type AliasEntry struct {
-	Name       string
-	Tag        string
-	Source     string // canonical HF ref
-	MMProjURL  string // optional vision projector URL
+	Name      string
+	Tag       string
+	Source    string // canonical HF ref
+	MMProjURL string // optional vision projector URL
 }
 
 // AliasTable holds short-name → AliasEntry mappings.
