@@ -75,7 +75,7 @@ func versionCmd() *cobra.Command {
 }
 
 // ---------------------------------------------------------------------------
-// serve — the full server, previously beeketd
+// serve — starts the Beeket HTTP server
 // ---------------------------------------------------------------------------
 
 // serveFlagValues holds cobra flag bindings for the serve subcommand.

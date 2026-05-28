@@ -186,12 +186,12 @@ func resolveYzma() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf(`beeketd: --auto-install-lib requires the 'yzma' CLI on PATH.
+	return "", fmt.Errorf(`beeket serve: --auto-install-lib requires the 'yzma' CLI on PATH.
 
   Install it once with:
     go install github.com/hybridgroup/yzma@latest
 
-  Then re-run beeketd, or pre-install the library yourself:
+  Then re-run beeket serve, or pre-install the library yourself:
     yzma install --lib <dir> --processor <cpu|cuda|metal|vulkan|rocm>`)
 }
 
