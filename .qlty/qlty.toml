@@ -38,6 +38,7 @@ version = "3.82.12"
 # the go 1.24 toolchain. All x/sys versions >= v0.42.0 require go >= 1.25.
 # This will be resolved when the project upgrades to Go 1.25.
 [[triage]]
+# golang.org/x/sys CVE-2026-39824: x/sys v0.42+ requires go 1.25,
+# which is not yet released. Suppressed until go 1.25 is available.
 match.rules = ["osv-scanner:CVE-2026-39824"]
 set.ignored  = true
-set.reason   = "golang.org/x/sys CVE-2026-39824: no compatible fix available for go 1.24 (v0.42+ requires go 1.25)"
