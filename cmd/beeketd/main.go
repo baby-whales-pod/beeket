@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,8 +13,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/baby-whales-pod/beeket/internal/api"
 	"github.com/baby-whales-pod/beeket/internal/config"
+	"github.com/baby-whales-pod/beeket/internal/engine"
 	"github.com/baby-whales-pod/beeket/internal/libinstall"
+	"github.com/baby-whales-pod/beeket/internal/models"
+	"github.com/baby-whales-pod/beeket/internal/scheduler"
+	"github.com/baby-whales-pod/beeket/internal/store"
 	"github.com/baby-whales-pod/beeket/internal/version"
 )
 
@@ -24,9 +30,10 @@ func main() {
 }
 
 // flagValues holds the raw flag values bound by cobra before they are merged
-// into a Config. Using a dedicated struct (rather than mutating cfg directly)
-// keeps the zero-value semantics clean.
+// into a Config.
 type flagValues struct {
+	cfgPath string
+
 	host string
 	port int
 
@@ -40,7 +47,6 @@ type flagValues struct {
 	keepAlive   string
 	contextSize int
 
-	// auto-install-lib flags
 	autoInstallLib    bool
 	libVersion        string
 	libUpgrade        bool
@@ -54,27 +60,23 @@ func newRootCmd() *cobra.Command {
 	var fv flagValues
 
 	cmd := &cobra.Command{
-		Use:   "beeketd",
-		Short: "Beeket model server",
-		Long: `beeketd is the Beeket inference server.
-
-It loads GGUF models via the Yzma library and serves an Ollama-compatible
-REST API on 127.0.0.1:11435 by default.`,
+		Use:          "beeketd",
+		Short:        "Beeket model server",
+		Long:         "beeketd is the Beeket HTTP server for running GGUF language models locally.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, fv)
 		},
 	}
 
-	// Server flags — use real defaults so --help is unambiguous.
+	cmd.Flags().StringVar(&fv.cfgPath, "config", "", "config file path (default: ~/.config/beeket/beeket.toml)")
+
 	cmd.Flags().StringVar(&fv.host, "host", "127.0.0.1", "bind address")
 	cmd.Flags().IntVar(&fv.port, "port", 11435, "listen port")
 
-	// Path flags
 	cmd.Flags().StringVar(&fv.dataDir, "data-dir", "", "data directory (default $XDG_DATA_HOME/beeket)")
 	cmd.Flags().StringVar(&fv.libDir, "lib-dir", "", "directory containing the llama.cpp shared library")
 
-	// Runtime flags — use real defaults.
 	cmd.Flags().StringVar(&fv.backend, "backend", "auto", "processor backend: auto|cpu|cuda|metal|vulkan|rocm")
 	cmd.Flags().IntVar(&fv.gpuLayers, "gpu-layers", -1, "GPU layers to offload; -1 = all")
 	cmd.Flags().IntVar(&fv.numParallel, "num-parallel", 1, "parallel inference slots per model")
@@ -82,7 +84,6 @@ REST API on 127.0.0.1:11435 by default.`,
 	cmd.Flags().StringVar(&fv.keepAlive, "keep-alive", "5m", "model idle timeout")
 	cmd.Flags().IntVar(&fv.contextSize, "context-size", 4096, "default context window in tokens")
 
-	// auto-install-lib flags
 	cmd.Flags().BoolVar(&fv.autoInstallLib, "auto-install-lib", false,
 		"automatically download the llama.cpp shared library via yzma before starting")
 	cmd.Flags().StringVar(&fv.libVersion, "lib-version", "",
@@ -92,20 +93,21 @@ REST API on 127.0.0.1:11435 by default.`,
 	cmd.Flags().DurationVar(&fv.libInstallTimeout, "lib-install-timeout", 10*time.Minute,
 		"maximum time to wait for the library download; only used with --auto-install-lib")
 
-	// Log flags
 	cmd.Flags().StringVar(&fv.logLevel, "log-level", "info", "log level: debug|info|warn|error")
 	cmd.Flags().StringVar(&fv.logFormat, "log-format", "text", "log format: text|json")
 
-	// version subcommand
 	cmd.AddCommand(newVersionCmd())
 
 	return cmd
 }
 
-// run is the main execution path for beeketd.
 func run(cmd *cobra.Command, fv flagValues) error {
-	// 1. Build config from defaults → env → flags.
-	cfg := config.Defaults()
+	cfgPtr, err := config.Load(fv.cfgPath)
+	if err != nil {
+		return fmt.Errorf("beeketd: load config: %w", err)
+	}
+	cfg := *cfgPtr
+
 	config.ApplyEnv(&cfg)
 	applyFlags(&cfg, cmd, fv)
 
@@ -113,30 +115,27 @@ func run(cmd *cobra.Command, fv flagValues) error {
 		return err
 	}
 
-	// 2. Set up logger.
 	log := newLogger(cfg.Log.Level, cfg.Log.Format)
 	slog.SetDefault(log)
 
-	log.Info("beeketd starting", "version", version.Version, "commit", version.Commit)
+	slog.Info("starting beeketd", "version", version.Version, "commit", version.Commit, "addr", cfg.Addr())
 
-	// 3. Set up signal handling early so CTRL+C is caught during the
-	//    (potentially long) library download, not just after it.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
+
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
 	go func() {
 		sig := <-quit
-		log.Info("received signal, shutting down", "signal", sig.String())
+		slog.Info("received signal, shutting down", "signal", sig.String())
 		rootCancel()
 	}()
 
-	// 4. Resolve lib dir (used by auto-install and engine init).
 	libDir := config.ResolveLibDir(&cfg)
 
-	// 5. Auto-install the llama.cpp shared library if requested.
 	if cfg.Runtime.AutoInstallLib {
-		log.Info("--auto-install-lib enabled")
+		slog.Info("--auto-install-lib enabled")
 
 		installCtx, installCancel := context.WithTimeout(rootCtx, fv.libInstallTimeout)
 		defer installCancel()
@@ -152,44 +151,79 @@ func run(cmd *cobra.Command, fv flagValues) error {
 			return fmt.Errorf("auto-install-lib: %w", err)
 		}
 
-		// Propagate the resolved lib dir into the process environment so the
-		// engine loader picks it up through the standard YZMA_LIB variable.
-		// This is process-local and does not mutate the user's shell.
 		if err := os.Setenv("YZMA_LIB", libDir); err != nil {
-			log.Warn("failed to set YZMA_LIB", "err", err)
+			slog.Warn("failed to set YZMA_LIB", "err", err)
 		}
 
-		// Update config so subsequent code (e.g. engine init) sees the
-		// resolved backend rather than "auto".
 		if cfg.Runtime.Backend == "auto" || cfg.Runtime.Backend == "" {
 			cfg.Runtime.Backend = resolvedBackend
 		}
 
-		log.Info("llama.cpp ready",
-			"backend", cfg.Runtime.Backend,
-			"lib_dir", libDir)
+		slog.Info("llama.cpp ready", "backend", cfg.Runtime.Backend, "lib_dir", libDir)
 	}
 
-	// 6. TODO(v0.1): Initialise the engine, model manager, scheduler, and
-	//    HTTP server here once those packages exist. For now we print a startup
-	//    banner so the binary is functional enough to test the flag wiring.
-	log.Info("listening (stub — engine not yet implemented)",
-		"host", cfg.Server.Host,
-		"port", cfg.Server.Port)
+	st, err := store.New(cfg.Paths.DataDir)
+	if err != nil {
+		return fmt.Errorf("beeketd: init store: %w", err)
+	}
 
-	// Wait for cancellation (triggered by SIGINT/SIGTERM in the goroutine above).
+	eng, err := engine.New(libDir)
+	if err != nil {
+		return fmt.Errorf("beeketd: init engine: %w", err)
+	}
+	defer eng.Close()
+
+	keepAlive, err := time.ParseDuration(cfg.Runtime.KeepAlive)
+	if err != nil {
+		return fmt.Errorf("beeketd: invalid keep-alive %q: %w", cfg.Runtime.KeepAlive, err)
+	}
+
+	mgr := models.New(st)
+	sched := scheduler.New(eng, mgr, scheduler.Config{
+		MaxLoaded:   cfg.Runtime.MaxLoaded,
+		KeepAlive:   keepAlive,
+		ContextSize: uint32(cfg.Runtime.ContextSize),
+		NumParallel: cfg.Runtime.NumParallel,
+		SamplerOpts: engine.DefaultSamplerOptions(),
+	})
+
+	handler := api.NewHandler(mgr, st, sched)
+	srv := api.NewServer(handler)
+	httpSrv := &http.Server{
+		Addr:         cfg.Addr(),
+		Handler:      srv,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	srvErr := make(chan error, 1)
+	go func() {
+		slog.Info("beeketd listening", "addr", cfg.Addr())
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			srvErr <- err
+			rootCancel()
+		}
+	}()
+
 	<-rootCtx.Done()
-	log.Info("shutdown complete")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		slog.Error("beeketd: shutdown error", "err", err)
+	}
+
+	select {
+	case err := <-srvErr:
+		return fmt.Errorf("beeketd: listen error: %w", err)
+	default:
+	}
+
+	slog.Info("beeketd: stopped")
 	return nil
 }
 
-// applyFlags overlays the cobra flag values onto cfg, skipping any flag that
-// was not explicitly provided by the user (so env vars win when flags are at
-// their default values but were not explicitly set on the command line).
-//
-// Note: now that cobra flags carry real defaults (not zero sentinels), we use
-// cmd.Flags().Changed() to distinguish "user explicitly set this" from
-// "cobra applied the default".
 func applyFlags(cfg *config.Config, cmd *cobra.Command, fv flagValues) {
 	if cmd.Flags().Changed("host") {
 		cfg.Server.Host = fv.host
@@ -238,7 +272,6 @@ func applyFlags(cfg *config.Config, cmd *cobra.Command, fv flagValues) {
 	}
 }
 
-// newLogger constructs a slog.Logger from level and format strings.
 func newLogger(level, format string) *slog.Logger {
 	var lvl slog.Level
 	switch level {
@@ -251,6 +284,7 @@ func newLogger(level, format string) *slog.Logger {
 	default:
 		lvl = slog.LevelInfo
 	}
+
 	opts := &slog.HandlerOptions{Level: lvl}
 	var h slog.Handler
 	if format == "json" {
@@ -261,14 +295,12 @@ func newLogger(level, format string) *slog.Logger {
 	return slog.New(h)
 }
 
-// newVersionCmd returns the `beeketd version` subcommand.
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print beeketd version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("beeketd %s (commit %s, built %s)\n",
-				version.Version, version.Commit, version.BuildDate)
+			fmt.Printf("beeketd %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
 		},
 	}
 }

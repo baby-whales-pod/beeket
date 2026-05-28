@@ -11,54 +11,50 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
+
+	"github.com/BurntSushi/toml"
 )
 
 // Config is the root configuration structure for beeketd.
 type Config struct {
-	Server  ServerConfig  `toml:"server"`
-	Paths   PathsConfig   `toml:"paths"`
-	Runtime RuntimeConfig `toml:"runtime"`
-	Log     LogConfig     `toml:"log"`
+	Server   ServerConfig   `toml:"server"`
+	Paths    PathsConfig    `toml:"paths"`
+	Runtime  RuntimeConfig  `toml:"runtime"`
+	Download DownloadConfig `toml:"download"`
+	Log      LogConfig      `toml:"log"`
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Host string `toml:"host"`
-	Port int    `toml:"port"`
+	Host    string   `toml:"host"`
+	Port    int      `toml:"port"`
+	Origins []string `toml:"origins"`
 }
 
 // PathsConfig holds filesystem path settings.
 type PathsConfig struct {
-	// DataDir is the base data directory (XDG_DATA_HOME/beeket by default).
 	DataDir string `toml:"data_dir"`
-	// LibDir is the directory that contains the llama.cpp shared library.
-	// Resolution order: --lib-dir flag → BEEKET_LIB_DIR → YZMA_LIB → DataDir/lib.
-	LibDir string `toml:"lib_dir"`
+	LibDir  string `toml:"lib_dir"`
 }
 
 // RuntimeConfig holds inference engine and auto-install settings.
 type RuntimeConfig struct {
-	// Backend selects the inference backend: auto | cpu | cuda | metal | vulkan | rocm.
-	Backend string `toml:"backend"`
-
-	// AutoInstallLib causes beeketd to invoke the yzma CLI to download the
-	// llama.cpp shared library before starting the engine, if the library is
-	// not already present.
-	AutoInstallLib bool `toml:"auto_install_lib"`
-
-	// LibVersion, when non-empty, is passed to `yzma install --version`.
-	// Ignored unless AutoInstallLib is true.
-	LibVersion string `toml:"lib_version"`
-
-	// LibUpgrade forces a reinstall even when the library is already present.
-	// Passed to `yzma install --upgrade`. Ignored unless AutoInstallLib is true.
-	LibUpgrade bool `toml:"lib_upgrade"`
+	Backend        string `toml:"backend"`
+	AutoInstallLib bool   `toml:"auto_install_lib"`
+	LibVersion     string `toml:"lib_version"`
+	LibUpgrade     bool   `toml:"lib_upgrade"`
 
 	GPULayers   int    `toml:"gpu_layers"`
 	NumParallel int    `toml:"num_parallel"`
 	MaxLoaded   int    `toml:"max_loaded"`
 	KeepAlive   string `toml:"keep_alive"`
 	ContextSize int    `toml:"context_size"`
+}
+
+// DownloadConfig holds download manager settings.
+type DownloadConfig struct {
+	Concurrency int `toml:"concurrency"`
 }
 
 // LogConfig holds logging settings.
@@ -69,10 +65,16 @@ type LogConfig struct {
 
 // Defaults returns a Config populated with compiled-in defaults.
 func Defaults() Config {
+	dataDir := defaultDataDir()
 	return Config{
 		Server: ServerConfig{
-			Host: "127.0.0.1",
-			Port: 11435,
+			Host:    "127.0.0.1",
+			Port:    11435,
+			Origins: []string{"http://localhost:11435", "http://127.0.0.1:11435"},
+		},
+		Paths: PathsConfig{
+			DataDir: dataDir,
+			LibDir:  "",
 		},
 		Runtime: RuntimeConfig{
 			Backend:     "auto",
@@ -82,6 +84,9 @@ func Defaults() Config {
 			KeepAlive:   "5m",
 			ContextSize: 4096,
 		},
+		Download: DownloadConfig{
+			Concurrency: 4,
+		},
 		Log: LogConfig{
 			Level:  "info",
 			Format: "text",
@@ -89,13 +94,32 @@ func Defaults() Config {
 	}
 }
 
-// ResolveLibDir resolves the lib directory according to the priority order
-// documented in spec §7.3 and the design doc §6:
-//
-//  1. --lib-dir flag / cfg.Paths.LibDir (already set by caller from flag)
+// Load reads and merges config from the given TOML file path into defaults.
+// Missing file is not an error.
+func Load(path string) (*Config, error) {
+	cfg := Defaults()
+	if path == "" {
+		path = defaultConfigPath()
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return &cfg, nil
+	}
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return nil, fmt.Errorf("config: decode %q: %w", path, err)
+	}
+	return &cfg, nil
+}
+
+// Addr returns the host:port listen address.
+func (c *Config) Addr() string {
+	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}
+
+// ResolveLibDir resolves the lib directory according to the priority order:
+//  1. --lib-dir flag / cfg.Paths.LibDir
 //  2. BEEKET_LIB_DIR env
-//  3. YZMA_LIB env (read-only)
-//  4. <data-dir>/lib  (default when no other source is set)
+//  3. YZMA_LIB env
+//  4. <data-dir>/lib
 func ResolveLibDir(cfg *Config) string {
 	if cfg.Paths.LibDir != "" {
 		return cfg.Paths.LibDir
@@ -109,7 +133,6 @@ func ResolveLibDir(cfg *Config) string {
 	return filepath.Join(resolveDataDir(cfg), "lib")
 }
 
-// resolveDataDir returns the effective data directory.
 func resolveDataDir(cfg *Config) string {
 	if cfg.Paths.DataDir != "" {
 		return cfg.Paths.DataDir
@@ -117,21 +140,10 @@ func resolveDataDir(cfg *Config) string {
 	if v := os.Getenv("BEEKET_DATA_DIR"); v != "" {
 		return v
 	}
-	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
-		return filepath.Join(v, "beeket")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		// Fallback to current directory if home is unavailable.
-		return filepath.Join(".", ".local", "share", "beeket")
-	}
-	return filepath.Join(home, ".local", "share", "beeket")
+	return defaultDataDir()
 }
 
-// ApplyEnv overlays environment-variable overrides onto cfg.
-// Flag-level overrides are applied by the cobra command after this.
 func ApplyEnv(cfg *Config) {
-	// Server
 	if v := os.Getenv("BEEKET_HOST"); v != "" {
 		cfg.Server.Host = v
 	}
@@ -141,7 +153,6 @@ func ApplyEnv(cfg *Config) {
 		}
 	}
 
-	// Paths — also reflect into cfg.Paths so callers don't need to re-read env.
 	if v := os.Getenv("BEEKET_DATA_DIR"); v != "" {
 		cfg.Paths.DataDir = v
 	}
@@ -149,7 +160,6 @@ func ApplyEnv(cfg *Config) {
 		cfg.Paths.LibDir = v
 	}
 
-	// Runtime
 	if v := os.Getenv("BEEKET_BACKEND"); v != "" {
 		cfg.Runtime.Backend = v
 	}
@@ -176,13 +186,10 @@ func ApplyEnv(cfg *Config) {
 			cfg.Runtime.ContextSize = n
 		}
 	}
-	// Explicit false/0 must disable the flag; non-empty string that is neither
-	// truthy nor falsy is intentionally ignored (preserves current value).
 	if v := os.Getenv("BEEKET_AUTO_INSTALL_LIB"); v != "" {
 		cfg.Runtime.AutoInstallLib = v == "true" || v == "1"
 	}
 
-	// Log
 	if v := os.Getenv("BEEKET_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
@@ -200,5 +207,27 @@ func Validate(cfg *Config) error {
 	if !validBackends[cfg.Runtime.Backend] {
 		return fmt.Errorf("unknown backend %q; valid values: auto, cpu, cuda, metal, vulkan, rocm", cfg.Runtime.Backend)
 	}
+	if _, err := time.ParseDuration(cfg.Runtime.KeepAlive); err != nil {
+		return fmt.Errorf("invalid keep_alive %q: %w", cfg.Runtime.KeepAlive, err)
+	}
 	return nil
+}
+
+func defaultDataDir() string {
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return filepath.Join(d, "beeket")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", ".local", "share", "beeket")
+	}
+	return filepath.Join(home, ".local", "share", "beeket")
+}
+
+func defaultConfigPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "beeket", "beeket.toml")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "beeket", "beeket.toml")
 }
