@@ -448,8 +448,8 @@ func TestFromMap_MixedRequiredOptional_StillOrdered(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"req":  map[string]any{"type": "string"},
-			"opt":  map[string]any{"type": "string"},
+			"req": map[string]any{"type": "string"},
+			"opt": map[string]any{"type": "string"},
 		},
 		"required": []any{"req"},
 	}

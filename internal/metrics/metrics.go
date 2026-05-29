@@ -99,7 +99,8 @@ var registerOnce sync.Once
 // Note: prometheus/client_golang's own init() already registers the Go runtime
 // and process collectors (NewGoCollector, NewProcessCollector) on
 // DefaultRegisterer — we must NOT register them again or we get:
-//   panic: duplicate metrics collector registration attempted
+//
+//	panic: duplicate metrics collector registration attempted
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(
