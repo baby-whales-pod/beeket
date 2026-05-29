@@ -72,9 +72,8 @@ The `pattern` label uses the Go 1.22 `ServeMux` matched route pattern (e.g. `POS
 |--------|------|--------|-------------|
 | `beeket_inference_requests_total` | counter | `model`, `endpoint`, `outcome (`success`/`error`/`cancelled`)) |
 | `beeket_inference_time_to_first_token_seconds` | histogram | `model` | Time from request receipt to first generated token |
-| `beeket_inference_eval_tokens_total` | histogram | `model` | Generated token throughput per request |
+| `beeket_inference_eval_tokens_total` | counter | `model` | Cumulative generated tokens; derive throughput via `rate()` |
 | `beeket_inference_duration_seconds` | histogram | `model` | End-to-end inference duration |
-| `beeket_inference_eval_tokens_total` | counter | `model`, `kind` | Tokens processed (`prompt` or `eval`) |
 
 ### Model lifecycle
 
@@ -108,9 +107,9 @@ histogram_quantile(0.95, sum by (pattern, le) (
 sum by (pattern) (rate(beeket_http_requests_total{status_code=~"5.."}[5m]))
 / sum by (pattern) (rate(beeket_http_requests_total[5m]))
 
-# Inference tokens/sec p50 and p95
-histogram_quantile(0.50, sum by (model, le) (rate(beeket_inference_eval_tokens_total[5m])))
-histogram_quantile(0.95, sum by (model, le) (rate(beeket_inference_eval_tokens_total[5m])))
+# Inference token generation rate (tokens/sec)
+# beeket_inference_eval_tokens_total is a counter — use rate() not histogram_quantile()
+sum by (model) (rate(beeket_inference_eval_tokens_total[1m]))
 
 # TTFT p95
 histogram_quantile(0.95, sum by (model, le) (
