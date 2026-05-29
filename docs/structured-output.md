@@ -8,6 +8,36 @@ Beeket uses the llama.cpp grammar sampler to enforce output constraints at the t
 
 The `format` field is accepted on both `/api/chat` and `/api/generate`.
 
+## Recommended parameters
+
+When using structured output, pass these options for best results:
+
+| Parameter | Recommended value | Purpose |
+|-----------|-------------------|---------|
+| `think` | `false` | Disable chain-of-thought on reasoning models (Qwen3, DeepSeek-R1, QwQ, etc.) |
+| `options.temperature` | `0.1` | Low temperature for deterministic JSON |
+| `options.top_p` | `0.9` | Nucleus sampling |
+| `options.num_predict` | `512` | Enough tokens for most JSON objects |
+
+### Thinking models
+
+Models like Qwen3, DeepSeek-R1, and similar reasoning models generate a
+`<think>…</think>` block before their actual response. When `format` is set
+this thinking preamble appears *before* the JSON, which disrupts the grammar
+sampler. Set `think: false` to suppress it:
+
+```json
+{
+  "model": "qwen3.5-2b:q4_k_m",
+  "think": false,
+  "format": { "type": "object", "..." : "..." },
+  "options": { "temperature": 0.1, "top_p": 0.9, "num_predict": 512 }
+}
+```
+
+Without `think: false`, reasoning models may generate prose or stop early
+instead of producing valid JSON.
+
 ## Usage
 
 ### JSON mode (any valid JSON object)
@@ -20,7 +50,9 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -d '{
     "model": "smollm2:135m",
     "stream": false,
+    "think": false,
     "format": "json",
+    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 512},
     "messages": [
       {"role": "user", "content": "Return a JSON object with a greeting field."}
     ]
@@ -37,6 +69,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -d '{
     "model": "smollm2:135m",
     "stream": false,
+    "think": false,
     "format": {
       "type": "object",
       "properties": {
@@ -46,6 +79,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
       },
       "required": ["name", "age"]
     },
+    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 512},
     "messages": [
       {"role": "user", "content": "Extract: Alice is 28 years old. Her email is alice@example.com"}
     ]
@@ -71,6 +105,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -d '{
     "model": "smollm2:135m",
     "stream": true,
+    "think": false,
     "format": {
       "type": "object",
       "properties": {
@@ -79,6 +114,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
       },
       "required": ["capital", "country"]
     },
+    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 512},
     "messages": [
       {"role": "user", "content": "What is the capital of France?"}
     ]
@@ -95,6 +131,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/generate \
   -d '{
     "model": "smollm2:135m",
     "stream": false,
+    "think": false,
     "format": {
       "type": "object",
       "properties": {
@@ -103,6 +140,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/generate \
       },
       "required": ["sentiment", "score"]
     },
+    "options": {"temperature": 0.1, "top_p": 0.9, "num_predict": 512},
     "prompt": "Classify the sentiment: I love this product!"
   }' | jq '.response | fromjson'
 ```
@@ -141,7 +179,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/generate \
 
 ## Limitations
 
-- **Property ordering**: Properties are emitted in alphabetical order within an object (required properties first). The model may not always fill optional properties.
+- **Property ordering**: For all-required objects with up to 6 fields, beeket generates grammar alternatives for all N! field orderings — the model may emit fields in any order. For objects with more than 6 required fields, or with mixed required+optional fields, properties are constrained to a fixed order (required first alphabetically, then optional).
 - **No `additionalProperties: false`**: Extra properties are not blocked; the grammar only enforces declared properties.
 - **Context window**: The grammar sampler adds overhead. For deeply nested schemas, the GBNF grammar can be large. Keep schemas shallow.
 - **Model quality**: Grammar constraints enforce *structure*, not *correctness*. A low-quality model may produce `{"name": "", "age": 0}` even when constrained.
