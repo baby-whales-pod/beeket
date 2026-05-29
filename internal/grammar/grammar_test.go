@@ -36,8 +36,8 @@ func TestFromJSONSchema_SimpleObject(t *testing.T) {
 	g, err := grammar.FromJSONSchema(raw)
 	require.NoError(t, err)
 	assert.Contains(t, g, "root ::=")
-	assert.Contains(t, g, `"name"`)
-	assert.Contains(t, g, `"age"`)
+	assert.Contains(t, g, `"\"name\""`, "key must be quoted in GBNF")
+	assert.Contains(t, g, `"\"age\""`, "key must be quoted in GBNF")
 	assert.Contains(t, g, "string")
 	assert.Contains(t, g, "integer")
 }
@@ -116,8 +116,8 @@ func TestFromMap_ObjectWithAllRequired(t *testing.T) {
 	}
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, `"city"`)
-	assert.Contains(t, g, `"country"`)
+	assert.Contains(t, g, `"\"city\""`)
+	assert.Contains(t, g, `"\"country\""`)
 	assert.Contains(t, g, "string")
 }
 
@@ -134,7 +134,7 @@ func TestFromMap_ObjectWithOptionalProps(t *testing.T) {
 	require.NoError(t, err)
 	// Optional property should be wrapped with "?"
 	assert.Contains(t, g, "?")
-	assert.Contains(t, g, `"bio"`)
+	assert.Contains(t, g, `"\"bio\""`)
 }
 
 func TestFromMap_NestedObject(t *testing.T) {
@@ -154,9 +154,9 @@ func TestFromMap_NestedObject(t *testing.T) {
 	}
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, `"address"`)
-	assert.Contains(t, g, `"street"`)
-	assert.Contains(t, g, `"zip"`)
+	assert.Contains(t, g, `"\"address\""`)
+	assert.Contains(t, g, `"\"street\""`)
+	assert.Contains(t, g, `"\"zip\""`)
 }
 
 func TestFromMap_Enum(t *testing.T) {
@@ -281,8 +281,8 @@ func TestFromMap_ObjectAllOptional(t *testing.T) {
 
 	// Both "a" and "b" must appear inside ( ... )? groups.
 	// A simple proxy: both property keys appear and the rule contains "?".
-	assert.Contains(t, rootLine, `"a"`, "property a must appear in root rule")
-	assert.Contains(t, rootLine, `"b"`, "property b must appear in root rule")
+	assert.Contains(t, rootLine, `"\"a\""`, "property a must appear in root rule")
+	assert.Contains(t, rootLine, `"\"b\""`, "property b must appear in root rule")
 	assert.Contains(t, rootLine, "?", "all-optional object must contain optional markers")
 
 	// Neither property should appear *without* the optional wrapper,
@@ -319,12 +319,12 @@ func TestFromMap_ObjectFirstPropOptional(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rootLine)
-	assert.Contains(t, rootLine, `"zzz"`, "required zzz must appear")
-	assert.Contains(t, rootLine, `"aaa"`, "optional aaa must appear")
+	assert.Contains(t, rootLine, `"\"zzz\""`, "required zzz must appear")
+	assert.Contains(t, rootLine, `"\"aaa\""`, "optional aaa must appear")
 	// aaa must be in an optional group
 	assert.Contains(t, rootLine, "?", "optional property must be wrapped")
 	// zzz (required) should appear before aaa (optional) in the rule
-	assert.Less(t, strings.Index(rootLine, `"zzz"`), strings.Index(rootLine, `"aaa"`),
+	assert.Less(t, strings.Index(rootLine, "zzz"), strings.Index(rootLine, "aaa"),
 		"required properties emitted before optional ones")
 }
 
@@ -353,8 +353,8 @@ func TestFromMap_AllRequired_TwoFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// Both field keys must appear.
-	assert.Contains(t, g, `"capital"`)
-	assert.Contains(t, g, `"country"`)
+	assert.Contains(t, g, `"\"capital\""`)
+	assert.Contains(t, g, `"\"country\""`)
 
 	// The grammar must have at least one alternation (|) for the two orderings.
 	assert.Contains(t, g, " | ", "grammar must have alternatives for both field orderings")
@@ -391,9 +391,9 @@ func TestFromMap_AllRequired_ThreeFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// All three fields must appear.
-	assert.Contains(t, g, `"a"`)
-	assert.Contains(t, g, `"b"`)
-	assert.Contains(t, g, `"c"`)
+	assert.Contains(t, g, `"\"a\""`)
+	assert.Contains(t, g, `"\"b\""`)
+	assert.Contains(t, g, `"\"c\""`)
 
 	// 3! = 6 orderings means 5 "|" separators in the alternatives expression.
 	// Count occurrences of " | " in the full grammar.
@@ -416,14 +416,41 @@ func TestFromMap_AllRequired_ConcreteSchema(t *testing.T) {
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
 
-	// Must contain per-field named rules.
+	// Field keys must be surrounded by escaped double-quotes so the grammar
+	// matches the actual JSON encoding ("capital" with quotes, not bare capital).
+	assert.Contains(t, g, `"\"capital\""`)
+	assert.Contains(t, g, `"\"country\""`)
+
+	// Must NOT contain the old wrong bare-key pattern.
+	assert.NotContains(t, g, `"capital" ws ":"`, "bare key without quotes is wrong for JSON")
+	assert.NotContains(t, g, `"country" ws ":"`, "bare key without quotes is wrong for JSON")
+
+	// Per-field named rules must exist.
 	assert.Contains(t, g, "root-capital")
 	assert.Contains(t, g, "root-country")
 
-	// The root rule must be an alternation, NOT a fixed sequence.
+	// The root rule must be an alternation so the model can emit fields in any order.
 	root := extractRootRule(t, g)
 	assert.Contains(t, root, " | ",
 		"root rule must offer alternatives so the model can emit fields in any order")
+}
+
+// TestFromMap_FieldKeysAreQuoted verifies that for a single required field,
+// the generated grammar wraps the key in escaped double-quotes.
+func TestFromMap_FieldKeysAreQuoted(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+		"required": []any{"name"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// Must match JSON-quoted key, not the bare word.
+	assert.Contains(t, g, `"\"name\""`, "grammar must match \"name\" (with quotes)")
+	assert.NotContains(t, g, `"name" ws ":"`, "bare key without quotes would be wrong")
 }
 
 // TestFromMap_AllRequired_SingleField verifies that a single required field
@@ -438,11 +465,9 @@ func TestFromMap_AllRequired_SingleField(t *testing.T) {
 	}
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, `"name"`)
+	assert.Contains(t, g, `"\"name\""`, "key must be quoted in GBNF")
 }
 
-// TestFromMap_MixedRequiredOptional_StillOrdered verifies that when there are
-// both required AND optional fields, we fall back to the ordered (non-permutation)
 // path: required fields first, optional wrapped in ( ... )?.
 func TestFromMap_MixedRequiredOptional_StillOrdered(t *testing.T) {
 	schema := map[string]any{
@@ -455,8 +480,8 @@ func TestFromMap_MixedRequiredOptional_StillOrdered(t *testing.T) {
 	}
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, `"req"`)
-	assert.Contains(t, g, `"opt"`)
+	assert.Contains(t, g, `"\"req\""`, "key must be quoted in GBNF")
+	assert.Contains(t, g, `"\"opt\""`, "key must be quoted in GBNF")
 	// Optional field must be wrapped.
 	assert.Contains(t, g, "?", "optional field must be wrapped in ( ... )?")
 }
@@ -527,7 +552,7 @@ func TestFromJSONSchema_RoundTrip_ExtractSchema(t *testing.T) {
 	g, err := grammar.FromJSONSchema(raw)
 	require.NoError(t, err)
 	// Grammar must reference all three property keys.
-	assert.Contains(t, g, `"name"`)
-	assert.Contains(t, g, `"score"`)
-	assert.Contains(t, g, `"pass"`)
+	assert.Contains(t, g, `"\"name\""`, "key must be quoted in GBNF")
+	assert.Contains(t, g, `"\"score\""`, "key must be quoted in GBNF")
+	assert.Contains(t, g, `"\"pass\""`, "key must be quoted in GBNF")
 }

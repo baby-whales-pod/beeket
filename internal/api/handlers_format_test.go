@@ -42,8 +42,8 @@ func TestResolveGrammar_JSONSchemaMap(t *testing.T) {
 	g, err := resolveGrammar(schema)
 	require.NoError(t, err)
 	assert.Contains(t, g, "root ::=")
-	assert.Contains(t, g, `"name"`)
-	assert.Contains(t, g, `"age"`)
+	assert.Contains(t, g, `"\"name\""`)
+	assert.Contains(t, g, `"\"age\""`)
 }
 
 func TestResolveGrammar_InvalidType(t *testing.T) {
@@ -137,5 +137,5 @@ func TestResolveGrammar_FromDecodedRequest(t *testing.T) {
 	g, err := resolveGrammar(req.Format)
 	require.NoError(t, err)
 	assert.Contains(t, g, "root ::=")
-	assert.Contains(t, g, `"city"`)
+	assert.Contains(t, g, `"\"city\""`)
 }
