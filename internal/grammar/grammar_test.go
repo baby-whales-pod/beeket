@@ -429,10 +429,24 @@ func TestFromMap_AllRequired_ConcreteSchema(t *testing.T) {
 	assert.Contains(t, g, "root-capital")
 	assert.Contains(t, g, "root-country")
 
-	// The root rule must be an alternation so the model can emit fields in any order.
+	// The root rule must reference the named fields rule (alternatives are
+	// extracted into root-fields to work around llama.cpp GBNF inline-group NFA issue).
 	root := extractRootRule(t, g)
-	assert.Contains(t, root, " | ",
-		"root rule must offer alternatives so the model can emit fields in any order")
+	assert.Contains(t, root, "root-fields",
+		"root rule must reference root-fields for named alternation")
+
+	// The root-fields rule must contain the alternatives.
+	assert.Contains(t, g, "root-fields ::=")
+	var fieldsLine string
+	for _, line := range strings.Split(g, "\n") {
+		if strings.HasPrefix(line, "root-fields") {
+			fieldsLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, fieldsLine, "root-fields rule must be present")
+	assert.Contains(t, fieldsLine, " | ",
+		"root-fields rule must offer alternatives for field ordering")
 }
 
 // TestFromMap_FieldKeysAreQuoted verifies that for a single required field,
@@ -531,10 +545,18 @@ func TestFieldPermutations_TwoFields(t *testing.T) {
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
 
-	// Exactly 1 " | " in the root rule = 2 alternatives.
-	root := extractRootRule(t, g)
-	count := strings.Count(root, " | ")
-	assert.Equal(t, 1, count, "2-field all-required object should have exactly 2 alternatives")
+	// Exactly 1 " | " in root-fields = 2 alternatives (alternatives are now
+	// in a named rule, not inline in root, to fix llama.cpp NFA issue).
+	var fieldsLine string
+	for _, line := range strings.Split(g, "\n") {
+		if strings.HasPrefix(line, "root-fields") {
+			fieldsLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, fieldsLine, "root-fields rule must be present for 2-field object")
+	count := strings.Count(fieldsLine, " | ")
+	assert.Equal(t, 1, count, "2-field all-required object should have exactly 2 alternatives in root-fields")
 }
 
 // ---- roundtrip: ensure generated grammar serialises a known schema ----
