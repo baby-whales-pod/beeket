@@ -718,7 +718,7 @@ func buildGenerateOptions(opts *Options) engine.GenerateOptions {
 	if opts == nil {
 		return goOpts
 	}
-	if opts.NumPredict > 0 {
+	if opts.NumPredict != 0 { // 0 = use default; -1 = unlimited
 		goOpts.MaxTokens = opts.NumPredict
 	}
 	if len(opts.Stop) > 0 {
@@ -739,6 +739,33 @@ func buildGenerateOptions(opts *Options) engine.GenerateOptions {
 	if opts.Seed != 0 {
 		goOpts.Sampler.Seed = opts.Seed
 	}
+	// Newly wired options.
+	if opts.TypicalP > 0 {
+		goOpts.Sampler.TypicalP = opts.TypicalP
+	}
+	if opts.RepeatPenalty > 0 {
+		goOpts.Sampler.RepeatPenalty = opts.RepeatPenalty
+	}
+	if opts.RepeatLastN != 0 {
+		goOpts.Sampler.RepeatLastN = opts.RepeatLastN
+	}
+	if opts.FrequencyPenalty != 0 {
+		goOpts.Sampler.FrequencyPenalty = opts.FrequencyPenalty
+	}
+	if opts.PresencePenalty != 0 {
+		goOpts.Sampler.PresencePenalty = opts.PresencePenalty
+	}
+	if opts.Mirostat > 0 {
+		goOpts.Sampler.Mirostat = opts.Mirostat
+	}
+	if opts.MirostatTau > 0 {
+		goOpts.Sampler.MirostatTau = opts.MirostatTau
+	}
+	if opts.MirostatEta > 0 {
+		goOpts.Sampler.MirostatEta = opts.MirostatEta
+	}
+	// num_ctx, num_thread, num_gpu, keep_alive, penalize_newline, tfs_z are
+	// accepted for Ollama API compatibility but not applied at request time.
 	return goOpts
 }
 

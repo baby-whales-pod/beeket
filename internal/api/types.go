@@ -102,15 +102,38 @@ type Message struct {
 }
 
 // Options holds per-request sampler and runtime overrides.
+// Field names and semantics match the Ollama API.
 type Options struct {
-	Temperature float32  `json:"temperature,omitempty"`
-	TopK        int32    `json:"top_k,omitempty"`
-	TopP        float32  `json:"top_p,omitempty"`
-	MinP        float32  `json:"min_p,omitempty"`
-	NumPredict  int      `json:"num_predict,omitempty"`
-	Seed        uint32   `json:"seed,omitempty"`
-	Stop        []string `json:"stop,omitempty"`
-	KeepAlive   string   `json:"keep_alive,omitempty"`
+	// Sampler parameters.
+	Temperature float32 `json:"temperature,omitempty"`
+	TopK        int32   `json:"top_k,omitempty"`
+	TopP        float32 `json:"top_p,omitempty"`
+	MinP        float32 `json:"min_p,omitempty"`
+	TypicalP    float32 `json:"typical_p,omitempty"`
+	TfsZ        float32 `json:"tfs_z,omitempty"` // Tail Free Sampling (no-op: not in yzma v1.13)
+
+	// Repetition / penalty parameters.
+	RepeatPenalty    float32 `json:"repeat_penalty,omitempty"`
+	RepeatLastN      int32   `json:"repeat_last_n,omitempty"` // window for repeat penalty; -1 = full context
+	FrequencyPenalty float32 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  float32 `json:"presence_penalty,omitempty"`
+	PenalizeNewline  *bool   `json:"penalize_newline,omitempty"` // accepted for compat; no-op
+
+	// Mirostat parameters (mutually exclusive with TopK/TopP; Mirostat > 0 enables).
+	Mirostat    int32   `json:"mirostat,omitempty"`     // 0=off, 1=Mirostat v1, 2=Mirostat v2
+	MirostatTau float32 `json:"mirostat_tau,omitempty"` // target entropy (default 5.0)
+	MirostatEta float32 `json:"mirostat_eta,omitempty"` // learning rate (default 0.1)
+
+	// Generation limits.
+	NumPredict int      `json:"num_predict,omitempty"` // max tokens to generate; -1 = unlimited
+	Stop       []string `json:"stop,omitempty"`
+	Seed       uint32   `json:"seed,omitempty"`
+
+	// Runtime hints (accepted for Ollama compatibility; applied at session level).
+	NumCtx    int    `json:"num_ctx,omitempty"`    // per-request context window (no-op: set at load time)
+	NumThread int    `json:"num_thread,omitempty"` // no-op: set at server start
+	NumGPU    int    `json:"num_gpu,omitempty"`    // no-op: set at server start
+	KeepAlive string `json:"keep_alive,omitempty"` // no-op: handled by scheduler
 }
 
 // GenerateRequest is the body for POST /api/generate.
