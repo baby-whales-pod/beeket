@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -89,30 +90,37 @@ var (
 	})
 )
 
+// registerOnce ensures Register() is idempotent — safe to call multiple times
+// (e.g. from tests, or if the server is restarted in-process).
+var registerOnce sync.Once
+
 // Register registers all beeket collectors on the default Prometheus registry,
 // plus the standard Go runtime and process collectors.
+// It is idempotent: subsequent calls are no-ops.
 func Register() {
-	prometheus.MustRegister(
-		// HTTP
-		HTTPRequestsTotal,
-		HTTPRequestDuration,
-		HTTPRequestsInFlight,
-		// Inference
-		InferenceRequestsTotal,
-		InferenceTTFT,
-		InferenceEvalTokensTotal,
-		InferenceDuration,
-		// Model lifecycle
-		ModelsLoaded,
-		ModelLoadDuration,
-		ModelEvictionsTotal,
-		// Build info / uptime
-		BuildInfo,
-		UptimeSeconds,
-		// Go runtime + process
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-	)
+	registerOnce.Do(func() {
+		prometheus.MustRegister(
+			// HTTP
+			HTTPRequestsTotal,
+			HTTPRequestDuration,
+			HTTPRequestsInFlight,
+			// Inference
+			InferenceRequestsTotal,
+			InferenceTTFT,
+			InferenceEvalTokensTotal,
+			InferenceDuration,
+			// Model lifecycle
+			ModelsLoaded,
+			ModelLoadDuration,
+			ModelEvictionsTotal,
+			// Build info / uptime
+			BuildInfo,
+			UptimeSeconds,
+			// Go runtime + process
+			collectors.NewGoCollector(),
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		)
+	})
 }
 
 // SetBuildInfo sets the beeket_build_info gauge (call once at startup).
