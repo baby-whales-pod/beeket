@@ -102,7 +102,19 @@ type SamplerOptions struct {
 	TopK        int32
 	TopP        float32
 	MinP        float32
+	TypicalP    float32 // 0 = disabled
 	Seed        uint32
+
+	// Repetition penalties (0 = disabled).
+	RepeatPenalty    float32 // > 1.0 penalises repeated tokens; 1.0 = off
+	RepeatLastN      int32   // context window for repeat penalty; -1 = full context
+	FrequencyPenalty float32 // additive frequency penalty
+	PresencePenalty  float32 // additive presence penalty
+
+	// Mirostat (mutually exclusive with TopK/TopP; Mirostat > 0 enables).
+	Mirostat    int32   // 0=off, 1=Mirostat v1, 2=Mirostat v2
+	MirostatTau float32 // target entropy (default 5.0)
+	MirostatEta float32 // learning rate (default 0.1)
 }
 
 // DefaultSamplerOptions returns sensible defaults.
@@ -113,6 +125,8 @@ func DefaultSamplerOptions() SamplerOptions {
 		TopP:        0.9,
 		MinP:        0.05,
 		Seed:        0,
+		MirostatTau: 5.0,
+		MirostatEta: 0.1,
 	}
 }
 
@@ -134,18 +148,55 @@ func (e *Engine) NewSession(model *Model, contextSize uint32, opts SamplerOption
 }
 
 // buildSampler constructs a sampler chain from options.
-// If grammarStr is non-empty, a grammar sampler is added AFTER the temperature
-// samplers but BEFORE the distribution sampler — the canonical llama.cpp order:
+// If grammarStr is non-empty, a grammar sampler is added AFTER the sampling
+// chain but BEFORE the distribution sampler — the canonical llama.cpp order.
 //
-//	TopK → TopP → MinP → TempExt → [Grammar] → Dist
+// Sampler chain layout:
+//
+//	[Penalties] → TopK → TopP | TypicalP → MinP → TempExt → [Grammar] → Dist
+//	or when Mirostat > 0:
+//	[Penalties] → Mirostat(v1|v2) → [Grammar]
 //
 // Returns an error if the grammar string is set but llama.cpp rejects it.
 func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) (llama.Sampler, error) {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
+
+	// Repetition / frequency / presence penalties.
+	if opts.RepeatPenalty > 0 || opts.FrequencyPenalty != 0 || opts.PresencePenalty != 0 {
+		lastN := opts.RepeatLastN
+		if lastN == 0 {
+			lastN = 64 // llama.cpp default
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitPenalties(lastN, opts.RepeatPenalty, opts.FrequencyPenalty, opts.PresencePenalty))
+	}
+
+	if opts.Mirostat > 0 {
+		tau := opts.MirostatTau
+		if tau == 0 {
+			tau = 5.0
+		}
+		eta := opts.MirostatEta
+		if eta == 0 {
+			eta = 0.1
+		}
+		switch opts.Mirostat {
+		case 1:
+			// Mirostat v1 needs vocab size — pass 0 to let llama.cpp use the model's vocab size.
+			llama.SamplerChainAdd(chain, llama.SamplerInitMirostat(0, opts.Seed, tau, eta, 100))
+		default: // 2
+			llama.SamplerChainAdd(chain, llama.SamplerInitMirostatV2(opts.Seed, tau, eta))
+		}
+	} else {
+		llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
+		if opts.TypicalP > 0 && opts.TypicalP < 1.0 {
+			llama.SamplerChainAdd(chain, llama.SamplerInitTypical(opts.TypicalP, 1))
+		} else {
+			llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
+		llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
+	}
+
 	if grammarStr != "" {
 		grammarSampler := llama.SamplerInitGrammar(vocab, grammarStr, "root")
 		if grammarSampler == 0 {
@@ -154,7 +205,11 @@ func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) (ll
 		}
 		llama.SamplerChainAdd(chain, grammarSampler)
 	}
-	llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+
+	// Dist is not added when Mirostat is active (Mirostat samples directly).
+	if opts.Mirostat == 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+	}
 	return chain, nil
 }
 
@@ -416,10 +471,42 @@ func l2Normalize(v []float32) {
 // Returns an error if the grammar sampler cannot be initialised (returns 0).
 func buildSamplerWithGrammar(opts SamplerOptions, vocab llama.Vocab, grammar string, lazyPatterns []string) (llama.Sampler, error) {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
+
+	// Repetition / frequency / presence penalties.
+	if opts.RepeatPenalty > 0 || opts.FrequencyPenalty != 0 || opts.PresencePenalty != 0 {
+		lastN := opts.RepeatLastN
+		if lastN == 0 {
+			lastN = 64
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitPenalties(lastN, opts.RepeatPenalty, opts.FrequencyPenalty, opts.PresencePenalty))
+	}
+
+	if opts.Mirostat > 0 {
+		tau := opts.MirostatTau
+		if tau == 0 {
+			tau = 5.0
+		}
+		eta := opts.MirostatEta
+		if eta == 0 {
+			eta = 0.1
+		}
+		switch opts.Mirostat {
+		case 1:
+			llama.SamplerChainAdd(chain, llama.SamplerInitMirostat(0, opts.Seed, tau, eta, 100))
+		default:
+			llama.SamplerChainAdd(chain, llama.SamplerInitMirostatV2(opts.Seed, tau, eta))
+		}
+	} else {
+		llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
+		if opts.TypicalP > 0 && opts.TypicalP < 1.0 {
+			llama.SamplerChainAdd(chain, llama.SamplerInitTypical(opts.TypicalP, 1))
+		} else {
+			llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
+		}
+		llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
+		llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
+	}
+
 	if len(lazyPatterns) > 0 {
 		grammarSampler := llama.SamplerInitGrammarLazyPatterns(vocab, grammar, "root", lazyPatterns, nil)
 		if grammarSampler == 0 {
@@ -435,7 +522,10 @@ func buildSamplerWithGrammar(opts SamplerOptions, vocab llama.Vocab, grammar str
 		}
 		llama.SamplerChainAdd(chain, grammarSampler)
 	}
-	llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+
+	if opts.Mirostat == 0 {
+		llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+	}
 	return chain, nil
 }
 
