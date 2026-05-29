@@ -297,8 +297,12 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if grammarStr != "" {
-		opts.Grammar = grammarStr
-		opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in ECMAScript regex
+		// Use eager grammar (GrammarStr): the sampler is active from token 0 of
+		// generation and forces the model to start with '{'. The lazy trigger path
+		// (Grammar + GrammarLazy) was broken because it fired on multi-character
+		// tokens like {" (token 4754), causing a grammar-stack crash in SamplerAccept.
+		// The eager path is safe now that PR #53 fixed the quoted JSON keys in GBNF.
+		opts.GrammarStr = grammarStr
 	}
 
 	// Suppress thinking mode when structured output is requested or think:false.
@@ -501,10 +505,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		opts.Grammar = grammarStr
 		opts.GrammarLazy = []string{lazyTrigger}
 	} else if chatGrammarStr != "" {
-		// Structured output: lazy grammar (trigger on "{") activates only when
-		// the model starts generating JSON, avoiding the prefill-token mismatch.
-		opts.Grammar = chatGrammarStr
-		opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in ECMAScript regex
+		// Eager grammar: active from token 0, forces model to start with '{'.
+		// See Generate handler comment for why the lazy trigger is not used here.
+		opts.GrammarStr = chatGrammarStr
 	}
 
 	start := time.Now()
