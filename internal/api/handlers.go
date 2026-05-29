@@ -307,9 +307,17 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	systemMsg := req.System
 	if needNoThinkGen {
 		if systemMsg == "" {
-			systemMsg = noThinkSystemContent
+			if grammarStr != "" {
+				systemMsg = noThinkWithJSON
+			} else {
+				systemMsg = noThinkOnly
+			}
 		} else {
-			systemMsg = noThinkSystemContent + "\n" + systemMsg
+			if grammarStr != "" {
+				systemMsg = noThinkWithJSON + "\n" + systemMsg
+			} else {
+				systemMsg = noThinkOnly + "\n" + systemMsg
+			}
 		}
 		opts.StopStrings = append(opts.StopStrings, "</think>")
 	}
@@ -460,7 +468,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	needNoThink := (chatGrammarStr != "") || (req.Think != nil && !*req.Think)
 	var chatOpts engine.GenerateOptions // built below; passed by pointer to injectNoThink
 	if needNoThink {
-		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts)
+		// withJSON=true only when structured output is requested, not for bare think:false.
+		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, chatGrammarStr != "")
 	}
 
 	prompt, err := h.chatPrompt(effectiveMsgs)
@@ -813,34 +822,43 @@ func resolveGrammar(format any) (string, error) {
 	}
 }
 
-// noThinkSystemContent is the system message injected when thinking must be suppressed.
+// noThinkOnly is injected when thinking must be suppressed but no JSON output is required.
 // "/no_think" is the Qwen3/QwQ control token that disables chain-of-thought output.
-// The JSON instruction is a belt-and-suspenders hint for all models.
-const noThinkSystemContent = "/no_think\nYou must respond ONLY with valid JSON. No explanations, no reasoning, no prose."
+const noThinkOnly = "/no_think"
 
-// injectNoThink prepends "/no_think" to the system message in msgs (or inserts
-// a new system message at the front). This suppresses thinking-model reasoning
-// blocks (e.g. Qwen3 <think>…</think>) that would otherwise appear before the
-// JSON output and prevent the lazy grammar trigger from firing.
+// noThinkWithJSON extends noThinkOnly with a JSON-output instruction for structured output.
+const noThinkWithJSON = "/no_think\nYou must respond ONLY with valid JSON. No explanations, no reasoning, no prose."
+
+// injectNoThink prepends a thinking-suppression prefix to the system message in msgs
+// (or inserts a new system message at the front).
+//
+// When withJSON is true (structured output requested), the prefix also instructs
+// the model to respond with JSON only. When false (think:false without format),
+// only the bare /no_think token is injected.
 //
 // It also adds "</think>" to opts.StopStrings as a safety net: if the model
 // still emits a thinking block despite /no_think, generation stops before any
 // post-think prose can appear.
-func injectNoThink(msgs []Message, opts *engine.GenerateOptions) []Message {
+func injectNoThink(msgs []Message, opts *engine.GenerateOptions, withJSON bool) []Message {
+	prefix := noThinkOnly
+	if withJSON {
+		prefix = noThinkWithJSON
+	}
+
 	result := make([]Message, len(msgs))
 	copy(result, msgs)
 
 	found := false
 	for i, m := range result {
 		if m.Role == "system" {
-			result[i].Content = noThinkSystemContent + "\n" + m.Content
+			result[i].Content = prefix + "\n" + m.Content
 			found = true
 			break
 		}
 	}
 	if !found {
 		newMsgs := make([]Message, 0, len(result)+1)
-		newMsgs = append(newMsgs, Message{Role: "system", Content: noThinkSystemContent})
+		newMsgs = append(newMsgs, Message{Role: "system", Content: prefix})
 		newMsgs = append(newMsgs, result...)
 		result = newMsgs
 	}
