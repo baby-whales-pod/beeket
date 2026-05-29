@@ -47,6 +47,12 @@ func TestGuessFilename_CaseInsensitiveGGUF(t *testing.T) {
 	assert.Equal(t, "Model-Q4_K_M.gguf", got)
 }
 
+func TestGuessFilename_VersionSuffixPreserved(t *testing.T) {
+	// "-v2" contains a digit so is treated as part of the base name, not a descriptor.
+	got := guessFilename("Mistral-7B-v2-GGUF", "Q4_K_M")
+	assert.Equal(t, "Mistral-7B-v2-Q4_K_M.gguf", got)
+}
+
 func TestGuessFilename_NoGGUFSuffix(t *testing.T) {
 	// Repo name with no GGUF suffix — treated as-is
 	got := guessFilename("my-model", "Q4_K_M")
@@ -83,6 +89,20 @@ func TestTmpFilename_NoURLPathSlashes(t *testing.T) {
 	url := "https://huggingface.co/org/repo/resolve/main/model.gguf"
 	got := TmpFilename(url)
 	assert.NotContains(t, got, "/")
+}
+
+func TestTmpFilename_QueryStringStripped(t *testing.T) {
+	// Query parameters must not appear in the filename
+	got := TmpFilename("https://example.com/model.gguf?token=abc")
+	assert.Equal(t, "model.gguf.tmp", got)
+	assert.NotContains(t, got, "token")
+}
+
+func TestTmpFilename_FragmentStripped(t *testing.T) {
+	// URL fragments must not appear in the filename
+	got := TmpFilename("https://example.com/model.gguf#section")
+	assert.Equal(t, "model.gguf.tmp", got)
+	assert.NotContains(t, got, "section")
 }
 
 // ---------------------------------------------------------------------------

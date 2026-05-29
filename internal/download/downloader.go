@@ -82,19 +82,14 @@ func resolveHF(path string) string {
 // they are part of the model's base name (size/version identifiers).
 var ggufSuffixRe = regexp.MustCompile(`(?i)(?:-[A-Za-z]+)?-GGUF$`)
 
-// guessFilename constructs a best-effort GGUF filename from a HuggingFace repo
-// name and a quantization string. It handles two common filename conventions:
+// guessFilename constructs the GGUF filename from a HuggingFace repo name and quantization tag.
+// It strips optional purely-alphabetic descriptors and the trailing -GGUF suffix, then
+// joins base and quant with a dash:
 //
-//   - Dot separator:  SmolLM2-135M-GGUF  → SmolLM2-135M.Q4_K_M.gguf
-//   - Dash separator: Qwen3.5-0.8B-MTP-GGUF → Qwen3.5-0.8B-Q4_K_M.gguf
-//
-// Because there is no universal convention, we emit the dash-separated form
-// (which correctly handles compound suffixes like -MTP-GGUF) and retain the
-// dot-separated form as a fallback documented for callers.
+//	Qwen3.5-0.8B-MTP-GGUF + Q4_K_M → Qwen3.5-0.8B-Q4_K_M.gguf
+//	SmolLM2-135M-GGUF + Q4_K_M      → SmolLM2-135M-Q4_K_M.gguf
 func guessFilename(repoName, quant string) string {
 	base := ggufSuffixRe.ReplaceAllString(repoName, "")
-	// Use dash separator to match the majority of modern HF GGUF repos
-	// (e.g. Qwen3.5-0.8B-Q4_K_M.gguf, Llama-3.2-1B-Q4_K_M.gguf).
 	return base + "-" + quant + ".gguf"
 }
 
