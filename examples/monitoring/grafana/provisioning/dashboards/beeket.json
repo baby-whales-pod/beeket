@@ -109,11 +109,11 @@
       "id": 6,
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (model, le) (rate(beeket_inference_tokens_per_second_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (model, le) (rate(beeket_inference_eval_tokens_total[5m])))",
           "legendFormat": "p50 {{model}}"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (model, le) (rate(beeket_inference_tokens_per_second_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (model, le) (rate(beeket_inference_eval_tokens_total[5m])))",
           "legendFormat": "p95 {{model}}"
         }
       ],

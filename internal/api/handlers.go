@@ -290,10 +290,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	if !firstTokenAt.IsZero() {
 		metrics.InferenceTTFT.WithLabelValues(modelKey).Observe(firstTokenAt.Sub(start).Seconds())
 	}
-	if evalCount > 0 && dur.Seconds() > 0 {
-		metrics.InferenceTokensPerSecond.WithLabelValues(modelKey).Observe(float64(evalCount) / dur.Seconds())
-	}
-	metrics.InferenceTokensTotal.WithLabelValues(modelKey, "eval").Add(float64(evalCount))
+	metrics.InferenceEvalTokensTotal.WithLabelValues(modelKey).Add(float64(evalCount))
 
 	if genErr != nil && r.Context().Err() == nil {
 		writeError(w, http.StatusInternalServerError, genErr.Error())
@@ -367,10 +364,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if !firstTokenAt.IsZero() {
 		metrics.InferenceTTFT.WithLabelValues(modelKey).Observe(firstTokenAt.Sub(start).Seconds())
 	}
-	if evalCount > 0 && dur.Seconds() > 0 {
-		metrics.InferenceTokensPerSecond.WithLabelValues(modelKey).Observe(float64(evalCount) / dur.Seconds())
-	}
-	metrics.InferenceTokensTotal.WithLabelValues(modelKey, "eval").Add(float64(evalCount))
+	metrics.InferenceEvalTokensTotal.WithLabelValues(modelKey).Add(float64(evalCount))
 
 	if genErr != nil && r.Context().Err() == nil {
 		writeError(w, http.StatusInternalServerError, genErr.Error())
@@ -538,7 +532,7 @@ func detailsFromManifest(mf *models.Manifest) ModelDetails {
 // inferenceOutcome returns the outcome label value for inference metrics.
 func inferenceOutcome(ctx interface{ Err() error }, err error) string {
 	if err == nil {
-		return metrics.OutcomeOK
+		return metrics.OutcomeSuccess
 	}
 	if ctx.Err() != nil {
 		return metrics.OutcomeCancelled

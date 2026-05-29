@@ -9,14 +9,14 @@ import (
 
 // StatusResponse is the payload returned by GET /api/status.
 type StatusResponse struct {
-	Version     string              `json:"version"`
-	Commit      string              `json:"commit"`
-	Built       string              `json:"built"`
+	Version       string            `json:"version"`
+	Commit        string            `json:"commit"`
+	Built         string            `json:"built"`
 	UptimeSeconds float64           `json:"uptime_seconds"`
-	Backend     string              `json:"backend"`
-	MaxLoaded   int                 `json:"max_loaded"`
-	NumParallel int                 `json:"num_parallel"`
-	LoadedModels []StatusModelInfo  `json:"loaded_models"`
+	Backend       string            `json:"backend"`
+	MaxLoaded     int               `json:"max_loaded"`
+	NumParallel   int               `json:"num_parallel"`
+	LoadedModels  []StatusModelInfo `json:"loaded_models"`
 }
 
 // StatusModelInfo describes one loaded model in the status response.
@@ -29,9 +29,9 @@ type StatusModelInfo struct {
 // Status handles GET /api/status — returns a human-readable JSON status blob.
 func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 	loaded := h.sched.LoadedModels()
-	models := make([]StatusModelInfo, 0, len(loaded))
+	mods := make([]StatusModelInfo, 0, len(loaded))
 	for _, l := range loaded {
-		models = append(models, StatusModelInfo{
+		mods = append(mods, StatusModelInfo{
 			Name:     l.Name,
 			Size:     l.Size,
 			LastUsed: l.LastUsed,
@@ -46,7 +46,7 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 		Backend:       h.backend,
 		MaxLoaded:     h.maxLoaded,
 		NumParallel:   h.numParallel,
-		LoadedModels:  models,
+		LoadedModels:  mods,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

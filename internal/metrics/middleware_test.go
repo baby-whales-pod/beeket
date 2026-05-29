@@ -5,19 +5,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/baby-whales-pod/beeket/internal/metrics"
 )
-
-// newTestRegistry creates isolated metric instances for testing,
-// independent of the default global registry.
-func newTestCounterVec(name string, labels []string) *prometheus.CounterVec {
-	return prometheus.NewCounterVec(prometheus.CounterOpts{Name: name}, labels)
-}
 
 // TestMiddleware_CountsRequests verifies that the middleware increments
 // HTTPRequestsTotal for each handled request.

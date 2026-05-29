@@ -224,11 +224,12 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 
 	slog.Info("starting beeket serve", "version", version.Version, "commit", version.Commit, "addr", cfg.Addr())
 
-	// Initialise Prometheus metrics.
+	// Initialise Prometheus metrics (gated on --metrics-enabled).
 	startTime := time.Now()
-	metrics.Register()
-	metrics.SetBuildInfo(version.Version, version.Commit, version.BuildDate)
-	metrics.StartUptimeTicker(startTime)
+	if cfg.Runtime.MetricsEnabled {
+		metrics.Register()
+		metrics.SetBuildInfo(version.Version, version.Commit, version.BuildDate)
+	}
 
 	// Signal handling set up early so CTRL+C works during library download.
 	quit := make(chan os.Signal, 1)
@@ -242,6 +243,11 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 		slog.Info("received signal, shutting down", "signal", sig.String())
 		rootCancel()
 	}()
+
+	// Start uptime ticker after rootCtx is established so it shuts down cleanly.
+	if cfg.Runtime.MetricsEnabled {
+		metrics.StartUptimeTicker(rootCtx, startTime)
+	}
 
 	libDir := config.ResolveLibDir(&cfg)
 
@@ -304,10 +310,12 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 		MaxLoaded:   cfg.Runtime.MaxLoaded,
 		NumParallel: cfg.Runtime.NumParallel,
 	})
-	srv := api.NewServer(handler)
+	srv := api.NewServer(handler, cfg.Runtime.MetricsEnabled)
 	httpSrv := &http.Server{
-		Addr:         cfg.Addr(),
-		Handler:      srv,
+		Addr: cfg.Addr(),
+		// Wrap the API server with the metrics middleware at the http.Server level
+		// to avoid double ResponseWriter wrapping and ensure Flusher works.
+		Handler:      api.WrapWithMetrics(srv, cfg.Runtime.MetricsEnabled),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,

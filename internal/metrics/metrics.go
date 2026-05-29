@@ -4,6 +4,7 @@
 package metrics
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,10 +43,11 @@ var (
 		Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
 	}, []string{"model"})
 
-	InferenceTokensPerSecond = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "beeket_inference_tokens_per_second",
-		Help:    "Generated token throughput per request.",
-		Buckets: []float64{1, 5, 10, 20, 40, 80, 160, 320, 640},
+	// InferenceEvalTokensTotal counts generated (eval) tokens.
+	// Derive throughput with rate(beeket_inference_eval_tokens_total[1m]).
+	InferenceEvalTokensTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "beeket_inference_eval_tokens_total",
+		Help: "Total number of tokens generated (eval) by the inference engine.",
 	}, []string{"model"})
 
 	InferenceDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -53,11 +55,6 @@ var (
 		Help:    "End-to-end inference request duration.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"model"})
-
-	InferenceTokensTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "beeket_inference_tokens_total",
-		Help: "Total tokens processed, by kind (prompt or eval).",
-	}, []string{"model", "kind"})
 )
 
 // Model lifecycle metrics.
@@ -103,9 +100,8 @@ func Register() {
 		// Inference
 		InferenceRequestsTotal,
 		InferenceTTFT,
-		InferenceTokensPerSecond,
+		InferenceEvalTokensTotal,
 		InferenceDuration,
-		InferenceTokensTotal,
 		// Model lifecycle
 		ModelsLoaded,
 		ModelLoadDuration,
@@ -125,21 +121,26 @@ func SetBuildInfo(ver, commit, built string) {
 }
 
 // StartUptimeTicker starts a background goroutine that updates the
-// beeket_uptime_seconds gauge every second. startTime should be
-// time.Now() captured at process start.
-func StartUptimeTicker(startTime time.Time) {
+// beeket_uptime_seconds gauge every second. The goroutine exits when ctx
+// is cancelled, preventing goroutine leaks on server shutdown.
+func StartUptimeTicker(ctx context.Context, startTime time.Time) {
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			UptimeSeconds.Set(time.Since(startTime).Seconds())
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				UptimeSeconds.Set(time.Since(startTime).Seconds())
+			}
 		}
 	}()
 }
 
 // InferenceOutcome constants match the `outcome` label values.
 const (
-	OutcomeOK        = "ok"
+	OutcomeSuccess   = "success"
 	OutcomeError     = "error"
 	OutcomeCancelled = "cancelled"
 )

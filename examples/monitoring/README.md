@@ -26,9 +26,9 @@ On Linux, containers cannot reach `host.docker.internal` by default.
 The `docker-compose.linux.yml` override adds the `host-gateway` mapping:
 
 ```bash
-# Terminal 1 — expose metrics on all interfaces so Prometheus can reach it
-beeket serve --metrics-bind 0.0.0.0:11435
-# or expose the main listener: beeket serve --host 0.0.0.0
+# Terminal 1 — expose metrics on a dedicated secondary port
+beeket serve --metrics-bind 0.0.0.0:11436
+# or expose the main listener on all interfaces: beeket serve --host 0.0.0.0
 
 # Terminal 2
 cd examples/monitoring
@@ -56,14 +56,15 @@ docker compose down -v       # also remove stored data
 Enable the `logs` profile to add Loki + Promtail:
 
 ```bash
-# Pipe beeket stderr to a file that Promtail can tail
-beeket serve 2>/var/log/beeket.log &
+# Redirect beeket stderr to /var/log/beeket/beeket.log for Promtail to scrape:
+sudo mkdir -p /var/log/beeket
+beeket serve 2>/var/log/beeket/beeket.log &
 
 # Start the full stack including Loki + Promtail
 docker compose --profile logs up -d
 ```
 
-The Promtail config expects logs at `/var/log/beeket.log`. Edit
+The Promtail config expects logs at `/var/log/beeket/*.log`. Edit
 `promtail/promtail.yml` to match your actual log path.
 
 ## Customising the Prometheus scrape target
