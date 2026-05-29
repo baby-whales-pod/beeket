@@ -76,7 +76,9 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 	emit("downloading", "", 0, 0)
 
 	// Download to a tmp path first, then content-address.
-	tmpPath := h.store.TmpPath(name + "_" + tag + ".gguf.tmp")
+	// TmpFilename derives a safe flat filename from the download URL,
+	// avoiding double-.gguf extensions and URL-as-path bugs.
+	tmpPath := h.store.TmpPath(download.TmpFilename(dlURL))
 
 	progress := func(downloaded, total int64) {
 		if stream {

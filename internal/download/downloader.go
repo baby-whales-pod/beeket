@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -68,11 +69,53 @@ func resolveHF(path string) string {
 	return "https://huggingface.co/" + path
 }
 
-// guessFilename tries to construct a GGUF filename from a repo name and quantization.
+// ggufSuffixRe matches trailing GGUF-variant suffixes in HuggingFace repo names.
+// It strips an optional purely-alphabetic descriptor segment before "-GGUF",
+// handling compound suffixes like:
+//
+//	-GGUF          → plain suffix, strip only "-GGUF"
+//	-MTP-GGUF      → strip "-MTP-GGUF" (MTP is alpha-only)
+//	-Instruct-GGUF → strip "-Instruct-GGUF"
+//	-Chat-GGUF     → strip "-Chat-GGUF"
+//
+// Segments containing digits (e.g. "-135M", "-0.8B") are NOT stripped because
+// they are part of the model's base name (size/version identifiers).
+var ggufSuffixRe = regexp.MustCompile(`(?i)(?:-[A-Za-z]+)?-GGUF$`)
+
+// guessFilename constructs a best-effort GGUF filename from a HuggingFace repo
+// name and a quantization string. It handles two common filename conventions:
+//
+//   - Dot separator:  SmolLM2-135M-GGUF  → SmolLM2-135M.Q4_K_M.gguf
+//   - Dash separator: Qwen3.5-0.8B-MTP-GGUF → Qwen3.5-0.8B-Q4_K_M.gguf
+//
+// Because there is no universal convention, we emit the dash-separated form
+// (which correctly handles compound suffixes like -MTP-GGUF) and retain the
+// dot-separated form as a fallback documented for callers.
 func guessFilename(repoName, quant string) string {
-	// e.g. SmolLM2-135M-GGUF → SmolLM2-135M.Q4_K_M.gguf
-	base := strings.TrimSuffix(repoName, "-GGUF")
-	return base + "." + quant + ".gguf"
+	base := ggufSuffixRe.ReplaceAllString(repoName, "")
+	// Use dash separator to match the majority of modern HF GGUF repos
+	// (e.g. Qwen3.5-0.8B-Q4_K_M.gguf, Llama-3.2-1B-Q4_K_M.gguf).
+	return base + "-" + quant + ".gguf"
+}
+
+// TmpFilename returns a safe, flat filename derived from a download URL.
+// It extracts the last path segment of the URL, strips any existing .gguf
+// extension to prevent double-.gguf, then appends .gguf.tmp.
+//
+// Example:
+//
+//	https://huggingface.co/org/repo/resolve/main/model.gguf → model.gguf.tmp
+//	https://huggingface.co/org/repo/resolve/main/model      → model.gguf.tmp
+func TmpFilename(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" {
+		// Fallback: sanitize the whole URL into a flat name.
+		safe := strings.NewReplacer("://", "_", "/", "_", ":", "_").Replace(rawURL)
+		return strings.TrimSuffix(safe, ".gguf") + ".gguf.tmp"
+	}
+	base := filepath.Base(u.Path) // last path segment only
+	base = strings.TrimSuffix(base, ".gguf")
+	return base + ".gguf.tmp"
 }
 
 // Get downloads the resource at rawURL to destPath, reporting progress.
@@ -88,6 +131,11 @@ func Get(ctx context.Context, rawURL, destPath string, progress Progress) (diges
 	// Parse URL to validate.
 	if _, err := url.Parse(rawURL); err != nil {
 		return "", fmt.Errorf("download: invalid URL %q: %w", rawURL, err)
+	}
+
+	// Ensure the destination directory exists (Bug 2: tmp dir may not exist).
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return "", fmt.Errorf("download: create dest dir: %w", err)
 	}
 
 	partialPath := destPath + ".partial"
@@ -203,7 +251,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() //nolint:errcheck
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
