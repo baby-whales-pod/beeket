@@ -298,7 +298,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 	if grammarStr != "" {
 		opts.Grammar = grammarStr
-		opts.GrammarLazy = []string{"{"}
+		opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in regex
 	}
 
 	prompt := req.Prompt
@@ -464,7 +464,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		if grammarStr != "" {
 			opts.Grammar = grammarStr
-			opts.GrammarLazy = []string{"{"}
+			opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in regex
 		}
 	}
 
