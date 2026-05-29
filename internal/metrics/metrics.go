@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 // HTTP metrics.
@@ -94,9 +93,13 @@ var (
 // (e.g. from tests, or if the server is restarted in-process).
 var registerOnce sync.Once
 
-// Register registers all beeket collectors on the default Prometheus registry,
-// plus the standard Go runtime and process collectors.
-// It is idempotent: subsequent calls are no-ops.
+// Register registers all custom beeket collectors on the default Prometheus
+// registry. It is idempotent: subsequent calls are no-ops.
+//
+// Note: prometheus/client_golang's own init() already registers the Go runtime
+// and process collectors (NewGoCollector, NewProcessCollector) on
+// DefaultRegisterer — we must NOT register them again or we get:
+//   panic: duplicate metrics collector registration attempted
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(
@@ -116,9 +119,8 @@ func Register() {
 			// Build info / uptime
 			BuildInfo,
 			UptimeSeconds,
-			// Go runtime + process
-			collectors.NewGoCollector(),
-			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+			// Go runtime and process collectors are already registered by
+			// prometheus/client_golang's init() — do not register them here.
 		)
 	})
 }
