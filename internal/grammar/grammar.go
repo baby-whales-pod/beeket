@@ -268,11 +268,22 @@ func (c *converter) visitObjectAllRequired(
 		alts = append(alts, strings.Join(parts, " "))
 	}
 
+	// For a single field there are no alternatives — embed it directly.
 	var body string
 	if len(alts) == 1 {
 		body = `"{" ws ` + alts[0] + ` "}" ws`
 	} else {
-		body = `"{" ws ( ` + strings.Join(alts, "\n            | ") + ` ) "}" ws`
+		// Extract the permutation alternatives into a separate named rule.
+		// llama.cpp's GBNF parser does not reliably handle inline ( A | B )
+		// groups: the NFA epsilon-transitions from the group into the
+		// continuation of the parent rule are not always generated, which
+		// leaves valid characters (e.g. '"') unreachable after '{' and causes:
+		//   std::runtime_error: Unexpected empty grammar stack
+		// Naming the group as a separate rule forces a proper rule-reference
+		// expansion path that llama.cpp handles correctly.
+		fieldsRule := strings.Join(alts, " | ")
+		fieldsName := c.addRule(name+"-fields", fieldsRule)
+		body = `"{" ws ` + fieldsName + ` "}" ws`
 	}
 
 	ruleName := c.addRule(name, body)
