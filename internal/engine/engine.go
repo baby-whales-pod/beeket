@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 
@@ -249,34 +250,119 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	return nil
 }
 
-// -------------------------------------------------------------------
-// Embeddings
-// -------------------------------------------------------------------
+// EmbedSession is a llama.Context created with Embeddings=1 and a
+// non-None PoolingType. It must not be used for generation.
+type EmbedSession struct {
+	model   *Model
+	ctx     llama.Context
+	pooling llama.PoolingType
+	nEmbd   int32
+}
 
-// Embed returns the embedding vector for the given text.
-func (s *Session) Embed(ctx context.Context, text string) ([]float32, error) {
-	// Set embedding mode on context params — for v0.1 we use a simple approach:
-	// tokenize, decode with pooling, read the embeddings from the last token position.
+// NewEmbedSession creates a dedicated context for embedding extraction.
+// The context has Embeddings=1 and PoolingType=Mean set so that a single
+// Encode call produces a pooled sequence vector.
+func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSession, error) {
+	cp := llama.ContextDefaultParams()
+	cp.NCtx = contextSize
+	cp.NBatch = contextSize // embed entire sequence in one batch
+	cp.NUbatch = contextSize
+	cp.Embeddings = 1
+	cp.PoolingType = llama.PoolingTypeMean // fallback; model default takes precedence
+	ctx, err := llama.InitFromModel(model.handle, cp)
+	if err != nil {
+		return nil, fmt.Errorf("engine: init embed context: %w", err)
+	}
+	// Ensure the context is in embedding mode (belt-and-suspenders).
+	llama.SetEmbeddings(ctx, true)
+	return &EmbedSession{
+		model:   model,
+		ctx:     ctx,
+		pooling: llama.GetPoolingType(ctx),
+		nEmbd:   llama.ModelNEmbd(model.handle),
+	}, nil
+}
+
+// Free releases the embed session's FFI resources.
+func (s *EmbedSession) Free() {
+	llama.Free(s.ctx) //nolint:errcheck
+}
+
+// NEmbd returns the embedding dimension.
+func (s *EmbedSession) NEmbd() int32 { return s.nEmbd }
+
+// Embed tokenises text, encodes it, reads the embedding vector, copies it
+// out of FFI memory, and L2-normalises it. Returns the vector and the token
+// count so callers can populate PromptEvalCount.
+func (s *EmbedSession) Embed(ctx context.Context, text string) ([]float32, int, error) {
+	if s.nEmbd <= 0 {
+		return nil, 0, fmt.Errorf("engine: model has no embedding dimension")
+	}
+
 	tokens := llama.Tokenize(s.model.vocab, text, true, true)
-	batch := llama.BatchGetOne(tokens)
+	if len(tokens) == 0 {
+		return nil, 0, fmt.Errorf("engine: embed: empty input after tokenisation")
+	}
 
+	// Respect context cancellation before submitting to the FFI.
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	default:
 	}
 
+	batch := llama.BatchGetOne(tokens)
+
+	// Encoder-only models (BERT, nomic-embed-text) use Encode.
+	// Decoder models with Embeddings=1 use Decode. Try Encode first,
+	// logging the error before falling back so it's visible in debug logs.
 	if _, err := llama.Encode(s.ctx, batch); err != nil {
-		// Fall back to Decode for models that don't have a separate encoder.
+		slog.Debug("embed: Encode failed, falling back to Decode", "err", err)
 		if _, err2 := llama.Decode(s.ctx, batch); err2 != nil {
-			return nil, fmt.Errorf("engine: embed decode: %w", err2)
+			return nil, len(tokens), fmt.Errorf("engine: embed: both Encode and Decode failed: %w", err2)
 		}
 	}
 
-	// For v0.1 return a placeholder — full pooling support requires
-	// ContextParams.Pooling to be set to mean/cls before context creation.
-	// This is wired up properly in the scheduler when creating embed sessions.
-	return nil, fmt.Errorf("engine: embedding extraction requires a dedicated embed session; use Engine.NewEmbedSession")
+	var raw []float32
+	if s.pooling != llama.PoolingTypeNone {
+		// Pooled: one vector per sequence (seq_id 0 from BatchGetOne).
+		v, err := llama.GetEmbeddingsSeq(s.ctx, 0, s.nEmbd)
+		if err == nil {
+			raw = v
+		}
+	}
+	if raw == nil {
+		// Fallback: take the last token's embedding (Ollama default).
+		v, err := llama.GetEmbeddingsIth(s.ctx, int32(len(tokens))-1, s.nEmbd)
+		if err == nil {
+			raw = v
+		}
+	}
+	if raw == nil {
+		return nil, len(tokens), fmt.Errorf("engine: embed: no embedding returned (pooling=%v)", s.pooling)
+	}
+
+	// Copy out of FFI-owned memory before it is invalidated.
+	out := make([]float32, len(raw))
+	copy(out, raw)
+	l2Normalize(out)
+	return out, len(tokens), nil
+}
+
+// l2Normalize divides each element of v by the vector's L2 norm in-place.
+// If the norm is zero the vector is left unchanged.
+func l2Normalize(v []float32) {
+	var sum float64
+	for _, x := range v {
+		sum += float64(x) * float64(x)
+	}
+	if sum == 0 {
+		return
+	}
+	norm := float32(1.0 / math.Sqrt(sum))
+	for i := range v {
+		v[i] *= norm
+	}
 }
 
 // -------------------------------------------------------------------

@@ -51,6 +51,7 @@ func (s *Server) routes(metricsEnabled bool) {
 	s.mux.HandleFunc("POST /api/generate", h.Generate)
 	s.mux.HandleFunc("POST /api/chat", h.Chat)
 	s.mux.HandleFunc("POST /api/embeddings", h.Embeddings)
+	s.mux.HandleFunc("POST /api/embed", h.Embeddings) // Ollama alias
 
 	// Operational.
 	s.mux.HandleFunc("GET /api/version", h.Version)

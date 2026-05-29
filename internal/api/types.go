@@ -136,16 +136,23 @@ type ChatResponse struct {
 	EvalDuration  int64   `json:"eval_duration,omitempty"`
 }
 
-// EmbeddingsRequest is the body for POST /api/embeddings.
+// EmbeddingsRequest is the body for POST /api/embeddings and POST /api/embed.
 type EmbeddingsRequest struct {
-	Model string `json:"model"`
-	Input any    `json:"input"` // string or []string
+	Model     string   `json:"model"`
+	Input     any      `json:"input,omitempty"`    // string or []string (new style)
+	Prompt    string   `json:"prompt,omitempty"`   // legacy single-input
+	Truncate  *bool    `json:"truncate,omitempty"` // default true (not implemented in v0.1)
+	KeepAlive string   `json:"keep_alive,omitempty"`
+	Options   *Options `json:"options,omitempty"`
 }
 
-// EmbeddingsResponse is returned by POST /api/embeddings.
+// EmbeddingsResponse is returned by POST /api/embeddings / POST /api/embed.
 type EmbeddingsResponse struct {
-	Model      string      `json:"model"`
-	Embeddings [][]float32 `json:"embeddings"`
+	Model           string      `json:"model"`
+	Embeddings      [][]float32 `json:"embeddings"`
+	TotalDuration   int64       `json:"total_duration,omitempty"`
+	LoadDuration    int64       `json:"load_duration,omitempty"`
+	PromptEvalCount int         `json:"prompt_eval_count,omitempty"`
 }
 
 // --- Operational types ---
