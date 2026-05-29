@@ -2,3 +2,4 @@
 
 - [Beeket Specification v0.1](./spec-v0.1.md)
 - [Setup Guide](./SETUP.md)
+- [Pulling Models](./models.md)
