@@ -124,13 +124,20 @@ func (e *Engine) NewSession(model *Model, contextSize uint32, opts SamplerOption
 	if err != nil {
 		return nil, fmt.Errorf("engine: init context: %w", err)
 	}
-	sampler := buildSampler(opts)
+	sampler := buildSampler(opts, model.vocab, "")
 	return &Session{model: model, ctx: ctx, sampler: sampler}, nil
 }
 
 // buildSampler constructs a sampler chain from options.
-func buildSampler(opts SamplerOptions) llama.Sampler {
+// If grammarStr is non-empty, a grammar sampler is prepended to the chain.
+func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) llama.Sampler {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
+	if grammarStr != "" {
+		grammarSampler := llama.SamplerInitGrammar(vocab, grammarStr, "root")
+		if grammarSampler != 0 {
+			llama.SamplerChainAdd(chain, grammarSampler)
+		}
+	}
 	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
 	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
 	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
@@ -153,10 +160,15 @@ type GenerateOptions struct {
 	MaxTokens   int
 	StopStrings []string
 	Sampler     SamplerOptions
+	// GrammarStr, if non-empty, is a GBNF grammar string that constrains
+	// the output tokens to valid productions of the grammar.
+	GrammarStr string
 }
 
 // Generate tokenises prompt and streams generated text pieces to out.
 // It respects ctx cancellation between decode calls.
+// If opts.GrammarStr is set, a temporary per-request sampler with a grammar
+// constraint is built and used (then freed), leaving the session sampler unchanged.
 func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOptions, out func(piece string) error) error {
 	tokens := llama.Tokenize(s.model.vocab, prompt, true, false)
 	batch := llama.BatchGetOne(tokens)
@@ -164,6 +176,14 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	nPredict := opts.MaxTokens
 	if nPredict <= 0 {
 		nPredict = 512
+	}
+
+	// Build a per-request sampler if a grammar constraint is requested.
+	// This avoids mutating the shared session sampler.
+	sampler := s.sampler
+	if opts.GrammarStr != "" {
+		sampler = buildSampler(opts.Sampler, s.model.vocab, opts.GrammarStr)
+		defer llama.SamplerFree(sampler)
 	}
 
 	var buf [256]byte
@@ -181,8 +201,8 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 		}
 		pos += batch.NTokens
 
-		token := llama.SamplerSample(s.sampler, s.ctx, -1)
-		llama.SamplerAccept(s.sampler, token)
+		token := llama.SamplerSample(sampler, s.ctx, -1)
+		llama.SamplerAccept(sampler, token)
 
 		if llama.VocabIsEOG(s.model.vocab, token) {
 			break

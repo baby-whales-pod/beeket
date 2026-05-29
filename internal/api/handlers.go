@@ -11,6 +11,7 @@ import (
 
 	"github.com/baby-whales-pod/beeket/internal/download"
 	"github.com/baby-whales-pod/beeket/internal/engine"
+	"github.com/baby-whales-pod/beeket/internal/grammar"
 	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 	"github.com/baby-whales-pod/beeket/internal/scheduler"
@@ -255,6 +256,14 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
+	// Resolve grammar constraint from the format field.
+	grammarStr, err := resolveGrammar(req.Format)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts.GrammarStr = grammarStr
+
 	prompt := req.Prompt
 	if req.System != "" {
 		prompt = req.System + "\n\n" + prompt
@@ -331,6 +340,14 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	name, tag := h.mgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
+
+	// Resolve grammar constraint from the format field.
+	grammarStr, err := resolveGrammar(req.Format)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts.GrammarStr = grammarStr
 
 	start := time.Now()
 	nw := NewNDJSONWriter(w)
@@ -538,4 +555,30 @@ func inferenceOutcome(ctx interface{ Err() error }, err error) string {
 		return metrics.OutcomeCancelled
 	}
 	return metrics.OutcomeError
+}
+
+// resolveGrammar converts the request's Format field to a GBNF grammar string.
+//
+//   - nil or missing: no constraint (empty string returned)
+//   - string "json":  generic JSON grammar
+//   - map (JSON Schema): converted to GBNF via the grammar package
+func resolveGrammar(format any) (string, error) {
+	if format == nil {
+		return "", nil
+	}
+	switch v := format.(type) {
+	case string:
+		if v == "json" {
+			return grammar.JSONSchemaGrammar, nil
+		}
+		return "", fmt.Errorf("unsupported format value %q; use \"json\" or a JSON Schema object", v)
+	case map[string]any:
+		gstr, err := grammar.FromMap(v)
+		if err != nil {
+			return "", fmt.Errorf("invalid JSON Schema in format field: %w", err)
+		}
+		return gstr, nil
+	default:
+		return "", fmt.Errorf("format must be \"json\" or a JSON Schema object")
+	}
 }
