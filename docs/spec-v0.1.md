@@ -449,7 +449,7 @@ The `llama.cpp` shared library is **not** statically linked. It must be present 
 
 ## 8. Technology Stack
 
-- **Go 1.22+** (for `slog`, generics, structured logging, and `net/http` improvements).
+- **Go 1.25+** (for `slog`, generics, structured logging, and `net/http` improvements).
 - **[Yzma](https://github.com/hybridgroup/yzma) v1.14.x** — inference engine wrapper around llama.cpp.
 - **`net/http`** from the standard library — no router framework for v0.1. We may add `chi` later if route fan-out justifies it.
 - **`log/slog`** — structured logging.
