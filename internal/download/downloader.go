@@ -11,8 +11,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/baby-whales-pod/beeket/internal/models"
 )
 
 // Progress is called periodically during a download.
@@ -69,27 +70,14 @@ func resolveHF(path string) string {
 	return "https://huggingface.co/" + path
 }
 
-// ggufSuffixRe matches trailing GGUF-variant suffixes in HuggingFace repo names.
-// It strips an optional purely-alphabetic descriptor segment before "-GGUF",
-// handling compound suffixes like:
-//
-//	-GGUF          → plain suffix, strip only "-GGUF"
-//	-MTP-GGUF      → strip "-MTP-GGUF" (MTP is alpha-only)
-//	-Instruct-GGUF → strip "-Instruct-GGUF"
-//	-Chat-GGUF     → strip "-Chat-GGUF"
-//
-// Segments containing digits (e.g. "-135M", "-0.8B") are NOT stripped because
-// they are part of the model's base name (size/version identifiers).
-var ggufSuffixRe = regexp.MustCompile(`(?i)(?:-[A-Za-z]+)?-GGUF$`)
-
 // guessFilename constructs the GGUF filename from a HuggingFace repo name and quantization tag.
-// It strips optional purely-alphabetic descriptors and the trailing -GGUF suffix, then
-// joins base and quant with a dash:
+// It strips optional purely-alphabetic descriptors and the trailing -GGUF suffix
+// (via models.StripGGUFSuffix), then joins base and quant with a dash:
 //
 //	Qwen3.5-0.8B-MTP-GGUF + Q4_K_M → Qwen3.5-0.8B-Q4_K_M.gguf
 //	SmolLM2-135M-GGUF + Q4_K_M      → SmolLM2-135M-Q4_K_M.gguf
 func guessFilename(repoName, quant string) string {
-	base := ggufSuffixRe.ReplaceAllString(repoName, "")
+	base := models.StripGGUFSuffix(repoName)
 	return base + "-" + quant + ".gguf"
 }
 

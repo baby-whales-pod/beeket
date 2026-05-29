@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/baby-whales-pod/beeket/internal/store"
@@ -55,18 +54,19 @@ func New(st *store.Store) *Manager {
 	}
 }
 
-// Resolve resolves a model reference to a (name, tag) pair.
-// It expands built-in aliases and normalises bare names.
+// Resolve resolves a model reference to a clean (name, tag) registry key.
+// It normalises all supported ref formats (hf.co shortcuts, HTTPS URLs,
+// short name:tag pairs) via CleanModelRef, so the result is always
+// slash-free, lowercase, and safe to use as a manifest store key.
+//
+// Alias entries (from the built-in alias table) bypass CleanModelRef and
+// return the alias's own Name/Tag directly.
 func (m *Manager) Resolve(ref string) (name, tag string) {
-	// Already has a colon — split on last colon.
-	if idx := strings.LastIndex(ref, ":"); idx > 0 {
-		return ref[:idx], ref[idx+1:]
-	}
-	// Check aliases table.
+	// Check aliases before cleaning — alias keys are already canonical.
 	if entry := m.aliases.Lookup(ref); entry != nil {
 		return entry.Name, entry.Tag
 	}
-	return ref, "latest"
+	return CleanModelRef(ref)
 }
 
 // Get returns the manifest for name:tag.

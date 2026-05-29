@@ -57,8 +57,10 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Resolve model name → (name, tag) and download URL.
-	name, tag := h.mgr.Resolve(req.Name)
+	// Resolve model name → clean (name, tag) registry key + download URL.
+	// mgr.Resolve now calls CleanModelRef internally, so the result is always
+	// slash-free and safe for the manifest store.
+	registryName, registryTag := h.mgr.Resolve(req.Name)
 	emit("resolving manifest", "", 0, 0)
 
 	var dlURL string
@@ -111,10 +113,10 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 		blobSize = fi.Size()
 	}
 
-	// Save manifest.
+	// Save manifest using the clean slash-free registry key.
 	mf := &models.Manifest{
-		Name:       name,
-		Tag:        tag,
+		Name:       registryName,
+		Tag:        registryTag,
 		Digest:     digest,
 		Size:       blobSize,
 		Source:     dlURL,
