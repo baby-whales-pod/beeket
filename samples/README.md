@@ -124,7 +124,7 @@ All scripts accept an `options` object to control sampling. Common parameters:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `temperature` | float | Randomness (0.0 = deterministic, 1.0 = default) |
+| `temperature` | float | Randomness (0.0 = deterministic, 0.8 = default) |
 | `top_p` | float | Nucleus sampling threshold |
 | `top_k` | int | Restrict to top-K tokens |
 | `num_predict` | int | Max tokens to generate |

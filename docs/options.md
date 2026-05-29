@@ -41,7 +41,7 @@ changed per-request.
 ## Example — creative chat
 
 ```bash
-curl -s -X POST http://127.0.0.1:11435/api/chat \
+curl -sS -X POST http://127.0.0.1:11435/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -58,7 +58,7 @@ curl -s -X POST http://127.0.0.1:11435/api/chat \
 ## Example — repetition penalty
 
 ```bash
-curl -s -X POST http://127.0.0.1:11435/api/generate \
+curl -sS -X POST http://127.0.0.1:11435/api/generate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -75,7 +75,7 @@ curl -s -X POST http://127.0.0.1:11435/api/generate \
 ## Example — Mirostat v2
 
 ```bash
-curl -s -X POST http://127.0.0.1:11435/api/chat \
+curl -sS -X POST http://127.0.0.1:11435/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -95,7 +95,7 @@ When using the `format` field for structured output, low temperature produces
 more deterministic JSON. Also set `think: false` on reasoning models:
 
 ```bash
-curl -s -X POST http://127.0.0.1:11435/api/chat \
+curl -sS -X POST http://127.0.0.1:11435/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen3.5-2b:q4_k_m",

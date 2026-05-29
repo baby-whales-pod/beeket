@@ -179,7 +179,7 @@ curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/generate \
 
 ## Limitations
 
-- **Property ordering**: Properties are emitted in alphabetical order within an object (required properties first). The model may not always fill optional properties.
+- **Property ordering**: For all-required objects with up to 6 fields, beeket generates grammar alternatives for all N! field orderings — the model may emit fields in any order. For objects with more than 6 required fields, or with mixed required+optional fields, properties are constrained to a fixed order (required first alphabetically, then optional).
 - **No `additionalProperties: false`**: Extra properties are not blocked; the grammar only enforces declared properties.
 - **Context window**: The grammar sampler adds overhead. For deeply nested schemas, the GBNF grammar can be large. Keep schemas shallow.
 - **Model quality**: Grammar constraints enforce *structure*, not *correctness*. A low-quality model may produce `{"name": "", "age": 0}` even when constrained.
