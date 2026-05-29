@@ -244,11 +244,11 @@ func (c *converter) visitObjectAllRequired(
 		if isComplex(expr) && !isPrimitive(expr) {
 			expr = c.addRule(childName, expr)
 		}
-		// gbnfKey produces a GBNF string literal that matches the JSON-quoted key,
-		// e.g. k="capital" → gbnfKey = `"\"capital\""` → GBNF matches `"capital"` (with quotes).
-		// Using json.Marshal(k) directly would produce `"capital"` which in GBNF
-		// matches the bare word capital (no quotes) — wrong for JSON.
-		gbnfKey := `"\"` + k + `\""`
+		// gbnfKey produces a GBNF string literal matching the JSON-quoted key.
+		// json.Marshal handles keys with embedded special characters safely.
+		// e.g. k="capital" → inner=`"capital"` → gbnfKey=`"\"capital\""` → GBNF matches `"capital"`
+		inner, _ := json.Marshal(k)
+		gbnfKey := `"` + strings.ReplaceAll(string(inner), `"`, `\"`) + `"`
 		fieldBody := fmt.Sprintf(`%s ws ":" ws %s`, gbnfKey, expr)
 		fieldRules[k] = c.addRule(childName, fieldBody)
 	}
@@ -303,7 +303,8 @@ func (c *converter) visitObjectMixed(
 		if isComplex(expr) && !isPrimitive(expr) {
 			expr = c.addRule(childName, expr)
 		}
-		gbnfKey := `"\"` + k + `\""`
+		inner, _ := json.Marshal(k)
+		gbnfKey := `"` + strings.ReplaceAll(string(inner), `"`, `\"`) + `"`
 		pair := fmt.Sprintf(`%s ":" ws %s`, gbnfKey, expr)
 		if i == 0 {
 			parts = append(parts, pair)
@@ -325,7 +326,8 @@ func (c *converter) visitObjectMixed(
 		if isComplex(expr) && !isPrimitive(expr) {
 			expr = c.addRule(childName, expr)
 		}
-		gbnfKey := `"\"` + k + `\""`
+		inner, _ := json.Marshal(k)
+		gbnfKey := `"` + strings.ReplaceAll(string(inner), `"`, `\"`) + `"`
 		pair := fmt.Sprintf(`%s ":" ws %s`, gbnfKey, expr)
 
 		needComma := len(reqKeys) > 0 || i > 0

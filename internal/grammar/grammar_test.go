@@ -281,8 +281,8 @@ func TestFromMap_ObjectAllOptional(t *testing.T) {
 
 	// Both "a" and "b" must appear inside ( ... )? groups.
 	// A simple proxy: both property keys appear and the rule contains "?".
-	assert.Contains(t, rootLine, `"\"a\""` , "property a must appear in root rule")
-	assert.Contains(t, rootLine, `"\"b\""` , "property b must appear in root rule")
+	assert.Contains(t, rootLine, `"\"a\""`, "property a must appear in root rule")
+	assert.Contains(t, rootLine, `"\"b\""`, "property b must appear in root rule")
 	assert.Contains(t, rootLine, "?", "all-optional object must contain optional markers")
 
 	// Neither property should appear *without* the optional wrapper,
@@ -319,8 +319,8 @@ func TestFromMap_ObjectFirstPropOptional(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, rootLine)
-	assert.Contains(t, rootLine, `"\"zzz\""` , "required zzz must appear")
-	assert.Contains(t, rootLine, `"\"aaa\""` , "optional aaa must appear")
+	assert.Contains(t, rootLine, `"\"zzz\""`, "required zzz must appear")
+	assert.Contains(t, rootLine, `"\"aaa\""`, "optional aaa must appear")
 	// aaa must be in an optional group
 	assert.Contains(t, rootLine, "?", "optional property must be wrapped")
 	// zzz (required) should appear before aaa (optional) in the rule
@@ -467,6 +467,7 @@ func TestFromMap_AllRequired_SingleField(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, g, `"\"name\""`, "key must be quoted in GBNF")
 }
+
 // path: required fields first, optional wrapped in ( ... )?.
 func TestFromMap_MixedRequiredOptional_StillOrdered(t *testing.T) {
 	schema := map[string]any{
