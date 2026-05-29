@@ -34,7 +34,7 @@ type mgrResolver interface {
 // Handler holds all dependencies for API handlers.
 type Handler struct {
 	mgr         *models.Manager
-	embedMgr    mgrResolver    // points to mgr unless overridden in tests
+	embedMgr    mgrResolver // points to mgr unless overridden in tests
 	store       *store.Store
 	sched       *scheduler.Scheduler
 	embedSched  embedScheduler // set to sched unless overridden in tests
@@ -267,7 +267,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stream := req.Stream == nil || *req.Stream
-	name, tag := h.embedMgr.Resolve(req.Model)
+	name, tag := h.mgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
@@ -344,7 +344,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stream := req.Stream == nil || *req.Stream
-	name, tag := h.embedMgr.Resolve(req.Model)
+	name, tag := h.mgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
@@ -412,17 +412,27 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalise inputs: support string, []string (new style) and legacy "prompt".
+	// Note: Truncate, KeepAlive, and Options fields are accepted for Ollama API
+	// compatibility but not yet implemented in v0.1. Truncate defaults to true
+	// per the Ollama spec, but inputs exceeding the context window will currently
+	// return an error from the engine layer rather than being silently truncated.
 	var inputs []string
 	switch v := req.Input.(type) {
 	case string:
-		if v != "" {
-			inputs = []string{v}
+		if v == "" {
+			writeError(w, http.StatusBadRequest, "input must not be empty")
+			return
 		}
+		inputs = []string{v}
 	case []any:
 		for _, item := range v {
 			s, ok := item.(string)
 			if !ok {
 				writeError(w, http.StatusBadRequest, "input array must contain only strings")
+				return
+			}
+			if s == "" {
+				writeError(w, http.StatusBadRequest, "input array must not contain empty strings")
 				return
 			}
 			inputs = append(inputs, s)

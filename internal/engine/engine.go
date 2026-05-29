@@ -13,9 +13,6 @@ import (
 	"github.com/hybridgroup/yzma/pkg/llama"
 )
 
-// mathSqrt is an alias for math.Sqrt to make it easy to stub in tests.
-var mathSqrt = math.Sqrt
-
 // Engine manages the lifecycle of the llama.cpp shared library.
 // It must be initialised once per process via New() before use.
 type Engine struct {
@@ -237,7 +234,7 @@ type EmbedSession struct {
 func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSession, error) {
 	cp := llama.ContextDefaultParams()
 	cp.NCtx = contextSize
-	cp.NBatch = contextSize  // embed entire sequence in one batch
+	cp.NBatch = contextSize // embed entire sequence in one batch
 	cp.NUbatch = contextSize
 	cp.Embeddings = 1
 	cp.PoolingType = llama.PoolingTypeMean // fallback; model default takes precedence
@@ -286,10 +283,12 @@ func (s *EmbedSession) Embed(ctx context.Context, text string) ([]float32, int, 
 	batch := llama.BatchGetOne(tokens)
 
 	// Encoder-only models (BERT, nomic-embed-text) use Encode.
-	// Decoder models with Embeddings=1 use Decode. Try Encode first.
+	// Decoder models with Embeddings=1 use Decode. Try Encode first,
+	// logging the error before falling back so it's visible in debug logs.
 	if _, err := llama.Encode(s.ctx, batch); err != nil {
+		slog.Debug("embed: Encode failed, falling back to Decode", "err", err)
 		if _, err2 := llama.Decode(s.ctx, batch); err2 != nil {
-			return nil, len(tokens), fmt.Errorf("engine: embed encode/decode: %w", err2)
+			return nil, len(tokens), fmt.Errorf("engine: embed: both Encode and Decode failed: %w", err2)
 		}
 	}
 
@@ -329,7 +328,7 @@ func l2Normalize(v []float32) {
 	if sum == 0 {
 		return
 	}
-	norm := float32(1.0 / mathSqrt(sum))
+	norm := float32(1.0 / math.Sqrt(sum))
 	for i := range v {
 		v[i] *= norm
 	}

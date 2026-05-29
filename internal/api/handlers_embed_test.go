@@ -42,12 +42,10 @@ func handlerForEmbedTest(es embedScheduler) *Handler {
 	}
 }
 
-// fakeManager is a stub models.Manager that only resolves names.
-// It satisfies the interface used by Handler indirectly via the mgr field.
+// fakeManager satisfies mgrResolver for embed handler tests.
 type fakeManager struct{}
 
 func (f *fakeManager) Resolve(ref string) (string, string) { return ref, "latest" }
-func (f *fakeManager) AliasLookup(_ string) interface{}    { return nil }
 
 func doEmbedReq(t *testing.T, h *Handler, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -151,6 +149,18 @@ func TestEmbeddingsHandler_SchedulerError(t *testing.T) {
 	h := handlerForEmbedTest(fs)
 	rr := doEmbedReq(t, h, map[string]any{"model": "m", "input": "text"})
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+}
+
+func TestEmbeddingsHandler_EmptyStringInput(t *testing.T) {
+	h := handlerForEmbedTest(&fakeEmbedSched{})
+	rr := doEmbedReq(t, h, map[string]any{"model": "m", "input": ""})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestEmbeddingsHandler_EmptyStringInArray(t *testing.T) {
+	h := handlerForEmbedTest(&fakeEmbedSched{})
+	rr := doEmbedReq(t, h, map[string]any{"model": "m", "input": []string{"ok", ""}})
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestEmbeddingsHandler_ResponseFields(t *testing.T) {

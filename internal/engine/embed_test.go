@@ -53,14 +53,7 @@ func TestL2Normalize_NormIsOne(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEmbedSession_NilModelReturnsError(t *testing.T) {
-	// NewEmbedSession panics deep in the FFI when the library is not loaded.
-	// We verify that the guard on model being non-nil works by checking what
-	// a nil EmbedSession does. In practice, NewEmbedSession is only ever called
-	// by the scheduler after the library has been loaded.
-	//
-	// This test just ensures l2Normalize doesn't regress — the FFI call would
-	// need BEEKET_E2E_MODEL set and a real llama.cpp library.
-	t.Log("FFI integration path covered by BEEKET_E2E_MODEL integration tests")
+	t.Skip("FFI integration path requires BEEKET_E2E_MODEL and a real llama.cpp library")
 }
 
 func TestL2Normalize_SingleElement(t *testing.T) {

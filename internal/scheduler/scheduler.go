@@ -15,7 +15,6 @@ import (
 
 const (
 	queueDepth = 32
-	loadGrace  = 200 * time.Millisecond
 )
 
 // Request represents a single inference request enqueued in a worker.
@@ -48,18 +47,21 @@ func (w *Worker) LastUsed() time.Time {
 }
 
 // Scheduler manages all active workers and enforces max-loaded limits.
+//
+// Lock ordering: mu MUST always be acquired before embedMu. Every site that
+// acquires both locks must follow this order to avoid ABBA deadlocks.
 type Scheduler struct {
-	mu          sync.Mutex
-	embedMu     sync.Mutex
-	eng         *engine.Engine
-	mgr         *models.Manager
-	workers     map[string]*Worker       // key: "name:tag"
+	mu           sync.Mutex
+	embedMu      sync.Mutex
+	eng          *engine.Engine
+	mgr          *models.Manager
+	workers      map[string]*Worker      // key: "name:tag"
 	embedWorkers map[string]*EmbedWorker // key: "name:tag#embed"
-	maxLoaded   int
-	keepAlive   time.Duration
-	contextSize uint32
-	numParallel int
-	samplerOpts engine.SamplerOptions
+	maxLoaded    int
+	keepAlive    time.Duration
+	contextSize  uint32
+	numParallel  int
+	samplerOpts  engine.SamplerOptions
 }
 
 // Config holds Scheduler configuration.
@@ -86,6 +88,18 @@ func New(eng *engine.Engine, mgr *models.Manager, cfg Config) *Scheduler {
 	}
 	go s.evictionLoop()
 	return s
+}
+
+// totalLoadedLocked returns the total number of loaded workers across both maps.
+// Caller must hold BOTH mu and embedMu.
+func (s *Scheduler) totalLoadedLocked() int {
+	return len(s.workers) + len(s.embedWorkers)
+}
+
+// setModelsLoadedGaugeLocked updates the beeket_models_loaded gauge.
+// Caller must hold BOTH mu and embedMu.
+func (s *Scheduler) setModelsLoadedGaugeLocked() {
+	metrics.ModelsLoaded.Set(float64(s.totalLoadedLocked()))
 }
 
 // Generate enqueues a generation request for the named model.
@@ -119,8 +133,7 @@ func (s *Scheduler) Generate(ctx context.Context, name, tag, prompt string, opts
 }
 
 // getOrLoadWorker returns an existing worker or loads the model to create a new one.
-// It is safe for concurrent callers: a double-check after the load prevents TOCTOU
-// races where two goroutines load the same model simultaneously.
+// Lock order: mu (only) for the fast-path; both mu+embedMu for gauge updates.
 func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	key := name + ":" + tag
 
@@ -129,13 +142,14 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 		s.mu.Unlock()
 		return w, nil
 	}
-
-	// Enforce max loaded by evicting LRU.
-	for len(s.workers) >= s.maxLoaded {
-		if !s.evictLRU() {
+	// Enforce max loaded by evicting LRU (need both maps for total count).
+	s.embedMu.Lock()
+	for s.totalLoadedLocked() >= s.maxLoaded {
+		if !s.evictLRULocked() && !s.evictLRUEmbedLocked() {
 			break
 		}
 	}
+	s.embedMu.Unlock()
 	s.mu.Unlock()
 
 	// Load the model outside the lock (may take a while).
@@ -169,19 +183,19 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 		keepAlive: s.keepAlive,
 	}
 
+	// TOCTOU double-check under both locks (mu before embedMu per ordering rule).
 	s.mu.Lock()
-	// TOCTOU double-check: another goroutine may have loaded the same model
-	// while we were outside the lock. If so, free the resources we just
-	// created and return the existing worker.
+	s.embedMu.Lock()
 	if existing, ok := s.workers[key]; ok {
+		s.embedMu.Unlock()
 		s.mu.Unlock()
 		newWorker.session.Free()
 		newWorker.model.Free()
 		return existing, nil
 	}
 	s.workers[key] = newWorker
-	// Update gauge inside the lock so it always reflects the true count.
-	metrics.ModelsLoaded.Set(float64(len(s.workers)))
+	s.setModelsLoadedGaugeLocked()
+	s.embedMu.Unlock()
 	s.mu.Unlock()
 
 	go newWorker.run()
@@ -189,13 +203,13 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	return newWorker, nil
 }
 
-// evictLRU removes the least-recently-used worker. Caller must hold s.mu.
-func (s *Scheduler) evictLRU() bool {
+// evictLRULocked removes the least-recently-used generate worker.
+// Caller must hold BOTH mu and embedMu.
+func (s *Scheduler) evictLRULocked() bool {
 	var oldest *Worker
 	var oldestKey string
 	for k, w := range s.workers {
-		lu := w.LastUsed()
-		if oldest == nil || lu.Before(oldest.LastUsed()) {
+		if oldest == nil || w.LastUsed().Before(oldest.LastUsed()) {
 			oldest = w
 			oldestKey = k
 		}
@@ -204,8 +218,7 @@ func (s *Scheduler) evictLRU() bool {
 		return false
 	}
 	delete(s.workers, oldestKey)
-	// Update gauge inside the lock (caller holds s.mu).
-	metrics.ModelsLoaded.Set(float64(len(s.workers)))
+	s.setModelsLoadedGaugeLocked()
 	metrics.ModelEvictionsTotal.WithLabelValues("lru").Inc()
 	go oldest.stop()
 	slog.Info("scheduler: evicted model", "model", oldestKey)
@@ -213,30 +226,48 @@ func (s *Scheduler) evictLRU() bool {
 }
 
 // evictionLoop periodically evicts workers idle longer than keepAlive.
+// Acquires mu then embedMu (consistent lock order).
 func (s *Scheduler) evictionLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		s.mu.Lock()
 		now := time.Now()
+		s.mu.Lock()
+		s.embedMu.Lock()
+
 		for key, w := range s.workers {
 			if now.Sub(w.LastUsed()) > w.keepAlive {
 				delete(s.workers, key)
-				// Update gauge inside the lock.
-				metrics.ModelsLoaded.Set(float64(len(s.workers)))
+				s.setModelsLoadedGaugeLocked()
 				metrics.ModelEvictionsTotal.WithLabelValues("idle").Inc()
 				go w.stop()
 				slog.Info("scheduler: idle eviction", "model", key)
 			}
 		}
+		// B3: also sweep embed workers.
+		for key, w := range s.embedWorkers {
+			if now.Sub(w.LastUsed()) > w.keepAlive {
+				delete(s.embedWorkers, key)
+				s.setModelsLoadedGaugeLocked()
+				metrics.ModelEvictionsTotal.WithLabelValues("idle").Inc()
+				go w.stop()
+				slog.Info("scheduler: embed idle eviction", "model", key)
+			}
+		}
+
+		s.embedMu.Unlock()
 		s.mu.Unlock()
 	}
 }
 
 // LoadedModels returns a snapshot of currently loaded model names.
+// Acquires mu then embedMu (consistent lock order).
 func (s *Scheduler) LoadedModels() []LoadedInfo {
 	s.mu.Lock()
+	s.embedMu.Lock()
+	defer s.embedMu.Unlock()
 	defer s.mu.Unlock()
+
 	var out []LoadedInfo
 	for key, w := range s.workers {
 		out = append(out, LoadedInfo{
@@ -245,7 +276,6 @@ func (s *Scheduler) LoadedModels() []LoadedInfo {
 			LastUsed: w.LastUsed(),
 		})
 	}
-	s.embedMu.Lock()
 	for key, w := range s.embedWorkers {
 		out = append(out, LoadedInfo{
 			Name:     key,
@@ -253,7 +283,6 @@ func (s *Scheduler) LoadedModels() []LoadedInfo {
 			LastUsed: w.LastUsed(),
 		})
 	}
-	s.embedMu.Unlock()
 	return out
 }
 
@@ -281,15 +310,15 @@ type EmbedWorker struct {
 }
 
 type embedRequest struct {
-	ctx   context.Context
-	text  string
-	out   chan embedResult
+	ctx  context.Context
+	text string
+	out  chan embedResult
 }
 
 type embedResult struct {
-	vec    []float32
+	vec     []float32
 	nTokens int
-	err    error
+	err     error
 }
 
 // LastUsed returns the embed worker's last-used timestamp under its mutex.
@@ -326,40 +355,28 @@ func (s *Scheduler) Embed(ctx context.Context, name, tag, input string) ([]float
 	}
 }
 
-// getOrLoadEmbedWorker returns the embed worker for name:tag, loading it if needed.
+// getOrLoadEmbedWorker returns the embed worker for name:tag, loading if needed.
+// Lock order: mu before embedMu.
 func (s *Scheduler) getOrLoadEmbedWorker(name, tag string) (*EmbedWorker, error) {
 	key := name + ":" + tag + "#embed"
 
+	s.mu.Lock()
 	s.embedMu.Lock()
 	if w, ok := s.embedWorkers[key]; ok {
 		s.embedMu.Unlock()
+		s.mu.Unlock()
 		return w, nil
 	}
 	// Enforce max loaded across both maps.
-	s.mu.Lock()
-	total := len(s.workers) + len(s.embedWorkers)
-	s.mu.Unlock()
-	for total >= s.maxLoaded {
-		s.embedMu.Unlock()
-		evictedEmbed := s.evictLRUEmbed()
-		evictedGen := false
-		if !evictedEmbed {
-			s.mu.Lock()
-			evictedGen = s.evictLRU()
-			s.mu.Unlock()
-		}
-		if !evictedEmbed && !evictedGen {
-			s.embedMu.Lock()
+	for s.totalLoadedLocked() >= s.maxLoaded {
+		if !s.evictLRUEmbedLocked() && !s.evictLRULocked() {
 			break
 		}
-		s.embedMu.Lock()
-		s.mu.Lock()
-		total = len(s.workers) + len(s.embedWorkers)
-		s.mu.Unlock()
 	}
 	s.embedMu.Unlock()
+	s.mu.Unlock()
 
-	// Load the model outside locks.
+	// Load outside locks.
 	mf, err := s.mgr.Get(name, tag)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: embed model %s:%s not found: %w", name, tag, err)
@@ -388,28 +405,30 @@ func (s *Scheduler) getOrLoadEmbedWorker(name, tag string) (*EmbedWorker, error)
 		keepAlive: s.keepAlive,
 	}
 
+	// TOCTOU double-check under both locks (mu before embedMu).
+	s.mu.Lock()
 	s.embedMu.Lock()
 	if existing, ok := s.embedWorkers[key]; ok {
-		// TOCTOU: another goroutine loaded it while we were outside the lock.
 		s.embedMu.Unlock()
+		s.mu.Unlock()
 		esess.Free()
 		m.Free()
 		return existing, nil
 	}
 	s.embedWorkers[key] = nw
+	s.setModelsLoadedGaugeLocked()
 	metrics.ModelLoadDuration.WithLabelValues(key).Observe(loadDur.Seconds())
 	s.embedMu.Unlock()
+	s.mu.Unlock()
 
 	go nw.run()
 	slog.Info("scheduler: embed worker loaded", "model", key, "load_dur", loadDur)
 	return nw, nil
 }
 
-// evictLRUEmbed removes the least-recently-used embed worker.
-// Must NOT be called while holding embedMu.
-func (s *Scheduler) evictLRUEmbed() bool {
-	s.embedMu.Lock()
-	defer s.embedMu.Unlock()
+// evictLRUEmbedLocked removes the least-recently-used embed worker.
+// Caller must hold BOTH mu and embedMu.
+func (s *Scheduler) evictLRUEmbedLocked() bool {
 	var oldest *EmbedWorker
 	var oldestKey string
 	for k, w := range s.embedWorkers {
@@ -422,6 +441,7 @@ func (s *Scheduler) evictLRUEmbed() bool {
 		return false
 	}
 	delete(s.embedWorkers, oldestKey)
+	s.setModelsLoadedGaugeLocked()
 	metrics.ModelEvictionsTotal.WithLabelValues("lru").Inc()
 	go oldest.stop()
 	slog.Info("scheduler: embed worker evicted", "model", oldestKey)
