@@ -10,7 +10,7 @@ REPORT_FILE = "qlty-report.json"
 SUMMARY_FILE = os.environ.get("GITHUB_STEP_SUMMARY")
 
 
-def load_report(path: str) -> dict:
+def load_report(path: str):
     with open(path, "r") as f:
         return json.load(f)
 
@@ -34,8 +34,8 @@ def main() -> None:
         write_summary(f"## qlty Quality Report\n\n⚠️ Could not parse report JSON: {exc}")
         sys.exit(0)
 
-    # qlty JSON output has an "issues" array at the top level
-    issues = report.get("issues") or report.get("results") or []
+    # qlty --json outputs a bare array, not {"issues": [...]}
+    issues = report if isinstance(report, list) else (report.get("issues") or report.get("results") or [])
 
     if not issues:
         write_summary("## qlty Quality Report\n\n✅ No issues found.")
@@ -43,11 +43,12 @@ def main() -> None:
 
     # Tally by severity
     severity_counts: dict[str, int] = defaultdict(int)
-    files_with_issues: dict[str, list[dict]] = defaultdict(list)
+    files_with_issues: dict[str, list] = defaultdict(list)
 
     for issue in issues:
-        # Normalise severity to lowercase; fall back to "unknown"
-        sev = (issue.get("level") or issue.get("severity") or "unknown").lower()
+        # Normalise: strip "LEVEL_" prefix, lowercase; fall back to "unknown"
+        raw_level = (issue.get("level") or issue.get("severity") or "unknown")
+        sev = raw_level.lower().removeprefix("level_")
         severity_counts[sev] += 1
 
         # Collect file path
