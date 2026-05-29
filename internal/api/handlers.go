@@ -11,6 +11,7 @@ import (
 
 	"github.com/baby-whales-pod/beeket/internal/download"
 	"github.com/baby-whales-pod/beeket/internal/engine"
+	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 	"github.com/baby-whales-pod/beeket/internal/scheduler"
 	"github.com/baby-whales-pod/beeket/internal/store"
@@ -20,15 +21,44 @@ import (
 
 // Handler holds all dependencies for API handlers.
 type Handler struct {
-	mgr   *models.Manager
-	store *store.Store
-	sched *scheduler.Scheduler
-	ready bool
+	mgr         *models.Manager
+	store       *store.Store
+	sched       *scheduler.Scheduler
+	ready       bool
+	startTime   time.Time
+	backend     string
+	maxLoaded   int
+	numParallel int
+}
+
+// HandlerConfig carries optional configuration for NewHandler.
+type HandlerConfig struct {
+	StartTime   time.Time
+	Backend     string
+	MaxLoaded   int
+	NumParallel int
 }
 
 // NewHandler creates a Handler.
 func NewHandler(mgr *models.Manager, st *store.Store, sched *scheduler.Scheduler) *Handler {
-	return &Handler{mgr: mgr, store: st, sched: sched, ready: true}
+	return NewHandlerWithConfig(mgr, st, sched, HandlerConfig{StartTime: time.Now()})
+}
+
+// NewHandlerWithConfig creates a Handler with explicit runtime config for the status endpoint.
+func NewHandlerWithConfig(mgr *models.Manager, st *store.Store, sched *scheduler.Scheduler, cfg HandlerConfig) *Handler {
+	if cfg.StartTime.IsZero() {
+		cfg.StartTime = time.Now()
+	}
+	return &Handler{
+		mgr:         mgr,
+		store:       st,
+		sched:       sched,
+		ready:       true,
+		startTime:   cfg.StartTime,
+		backend:     cfg.Backend,
+		maxLoaded:   cfg.MaxLoaded,
+		numParallel: cfg.NumParallel,
+	}
 }
 
 // ---- Model management ----
@@ -222,6 +252,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	stream := req.Stream == nil || *req.Stream
 	name, tag := h.mgr.Resolve(req.Model)
+	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
 	prompt := req.Prompt
@@ -232,8 +263,12 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	nw := NewNDJSONWriter(w)
 	evalCount := 0
+	var firstTokenAt time.Time
 
 	genErr := h.sched.Generate(r.Context(), name, tag, prompt, opts, func(piece string) error {
+		if evalCount == 0 {
+			firstTokenAt = time.Now()
+		}
 		evalCount++
 		if stream {
 			return nw.Write(GenerateResponse{
@@ -246,12 +281,23 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	dur := time.Since(start)
+
+	// Record inference metrics.
+	outcome := inferenceOutcome(r.Context(), genErr)
+	metrics.InferenceRequestsTotal.WithLabelValues(modelKey, "generate", outcome).Inc()
+	metrics.InferenceDuration.WithLabelValues(modelKey).Observe(dur.Seconds())
+	if !firstTokenAt.IsZero() {
+		metrics.InferenceTTFT.WithLabelValues(modelKey).Observe(firstTokenAt.Sub(start).Seconds())
+	}
+	metrics.InferenceEvalTokensTotal.WithLabelValues(modelKey).Add(float64(evalCount))
+
 	if genErr != nil && r.Context().Err() == nil {
 		writeError(w, http.StatusInternalServerError, genErr.Error())
 		return
 	}
 
-	total := time.Since(start).Nanoseconds()
+	total := dur.Nanoseconds()
 	nw.Write(GenerateResponse{ //nolint:errcheck
 		Model:         req.Model,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
@@ -283,14 +329,19 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	stream := req.Stream == nil || *req.Stream
 	name, tag := h.mgr.Resolve(req.Model)
+	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
 	start := time.Now()
 	nw := NewNDJSONWriter(w)
 	var sb strings.Builder
 	evalCount := 0
+	var firstTokenAt time.Time
 
 	genErr := h.sched.Generate(r.Context(), name, tag, prompt, opts, func(piece string) error {
+		if evalCount == 0 {
+			firstTokenAt = time.Now()
+		}
 		evalCount++
 		sb.WriteString(piece)
 		if stream {
@@ -304,12 +355,23 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	dur := time.Since(start)
+
+	// Record inference metrics.
+	outcome := inferenceOutcome(r.Context(), genErr)
+	metrics.InferenceRequestsTotal.WithLabelValues(modelKey, "chat", outcome).Inc()
+	metrics.InferenceDuration.WithLabelValues(modelKey).Observe(dur.Seconds())
+	if !firstTokenAt.IsZero() {
+		metrics.InferenceTTFT.WithLabelValues(modelKey).Observe(firstTokenAt.Sub(start).Seconds())
+	}
+	metrics.InferenceEvalTokensTotal.WithLabelValues(modelKey).Add(float64(evalCount))
+
 	if genErr != nil && r.Context().Err() == nil {
 		writeError(w, http.StatusInternalServerError, genErr.Error())
 		return
 	}
 
-	total := time.Since(start).Nanoseconds()
+	total := dur.Nanoseconds()
 	nw.Write(ChatResponse{ //nolint:errcheck
 		Model:         req.Model,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
@@ -465,4 +527,15 @@ func detailsFromManifest(mf *models.Manifest) ModelDetails {
 		ContextLength:     mf.Details.ContextLength,
 		Format:            mf.Details.Format,
 	}
+}
+
+// inferenceOutcome returns the outcome label value for inference metrics.
+func inferenceOutcome(ctx interface{ Err() error }, err error) string {
+	if err == nil {
+		return metrics.OutcomeSuccess
+	}
+	if ctx.Err() != nil {
+		return metrics.OutcomeCancelled
+	}
+	return metrics.OutcomeError
 }

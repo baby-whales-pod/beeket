@@ -1,0 +1,12 @@
+# Linux override: adds host.docker.internal → host gateway mapping
+# so Prometheus can reach beeket on the host without network_mode: host.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d
+
+version: "3.9"
+
+services:
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

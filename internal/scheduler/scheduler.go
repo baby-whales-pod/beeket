@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/baby-whales-pod/beeket/internal/engine"
+	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 )
 
@@ -36,6 +37,14 @@ type Worker struct {
 	quit      chan struct{}
 	lastUsed  time.Time
 	keepAlive time.Duration
+}
+
+// LastUsed returns the worker's last-used timestamp under the worker's own mutex,
+// preventing data races when eviction loops read it concurrently.
+func (w *Worker) LastUsed() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastUsed
 }
 
 // Scheduler manages all active workers and enforces max-loaded limits.
@@ -107,8 +116,11 @@ func (s *Scheduler) Generate(ctx context.Context, name, tag, prompt string, opts
 }
 
 // getOrLoadWorker returns an existing worker or loads the model to create a new one.
+// It is safe for concurrent callers: a double-check after the load prevents TOCTOU
+// races where two goroutines load the same model simultaneously.
 func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	key := name + ":" + tag
+
 	s.mu.Lock()
 	if w, ok := s.workers[key]; ok {
 		s.mu.Unlock()
@@ -123,13 +135,14 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	}
 	s.mu.Unlock()
 
-	// Load the model (may take a moment).
+	// Load the model outside the lock (may take a while).
 	mf, err := s.mgr.Get(name, tag)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: model %s:%s not found: %w", name, tag, err)
 	}
 	blobPath := s.mgr.BlobPath(mf)
 
+	loadStart := time.Now()
 	m, err := s.eng.LoadModel(blobPath)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: load model: %w", err)
@@ -140,8 +153,10 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 		m.Free()
 		return nil, fmt.Errorf("scheduler: new session: %w", err)
 	}
+	loadDur := time.Since(loadStart)
+	metrics.ModelLoadDuration.WithLabelValues(key).Observe(loadDur.Seconds())
 
-	w := &Worker{
+	newWorker := &Worker{
 		model:     m,
 		session:   sess,
 		manifest:  mf,
@@ -152,12 +167,23 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	}
 
 	s.mu.Lock()
-	s.workers[key] = w
+	// TOCTOU double-check: another goroutine may have loaded the same model
+	// while we were outside the lock. If so, free the resources we just
+	// created and return the existing worker.
+	if existing, ok := s.workers[key]; ok {
+		s.mu.Unlock()
+		newWorker.session.Free()
+		newWorker.model.Free()
+		return existing, nil
+	}
+	s.workers[key] = newWorker
+	// Update gauge inside the lock so it always reflects the true count.
+	metrics.ModelsLoaded.Set(float64(len(s.workers)))
 	s.mu.Unlock()
 
-	go w.run()
-	slog.Info("scheduler: model loaded", "model", key)
-	return w, nil
+	go newWorker.run()
+	slog.Info("scheduler: model loaded", "model", key, "load_dur", loadDur)
+	return newWorker, nil
 }
 
 // evictLRU removes the least-recently-used worker. Caller must hold s.mu.
@@ -165,7 +191,8 @@ func (s *Scheduler) evictLRU() bool {
 	var oldest *Worker
 	var oldestKey string
 	for k, w := range s.workers {
-		if oldest == nil || w.lastUsed.Before(oldest.lastUsed) {
+		lu := w.LastUsed()
+		if oldest == nil || lu.Before(oldest.LastUsed()) {
 			oldest = w
 			oldestKey = k
 		}
@@ -174,6 +201,9 @@ func (s *Scheduler) evictLRU() bool {
 		return false
 	}
 	delete(s.workers, oldestKey)
+	// Update gauge inside the lock (caller holds s.mu).
+	metrics.ModelsLoaded.Set(float64(len(s.workers)))
+	metrics.ModelEvictionsTotal.WithLabelValues("lru").Inc()
 	go oldest.stop()
 	slog.Info("scheduler: evicted model", "model", oldestKey)
 	return true
@@ -187,8 +217,11 @@ func (s *Scheduler) evictionLoop() {
 		s.mu.Lock()
 		now := time.Now()
 		for key, w := range s.workers {
-			if now.Sub(w.lastUsed) > w.keepAlive {
+			if now.Sub(w.LastUsed()) > w.keepAlive {
 				delete(s.workers, key)
+				// Update gauge inside the lock.
+				metrics.ModelsLoaded.Set(float64(len(s.workers)))
+				metrics.ModelEvictionsTotal.WithLabelValues("idle").Inc()
 				go w.stop()
 				slog.Info("scheduler: idle eviction", "model", key)
 			}
@@ -206,7 +239,7 @@ func (s *Scheduler) LoadedModels() []LoadedInfo {
 		out = append(out, LoadedInfo{
 			Name:     key,
 			Size:     w.manifest.Size,
-			LastUsed: w.lastUsed,
+			LastUsed: w.LastUsed(),
 		})
 	}
 	return out
