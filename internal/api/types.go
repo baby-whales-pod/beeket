@@ -88,12 +88,16 @@ type Options struct {
 }
 
 // GenerateRequest is the body for POST /api/generate.
+// Format, when set, constrains the model output to valid JSON.
+//   - "json" (string): any valid JSON object.
+//   - A JSON Schema object: output is constrained to match the schema.
 type GenerateRequest struct {
 	Model   string   `json:"model"`
 	Prompt  string   `json:"prompt"`
 	System  string   `json:"system,omitempty"`
 	Stream  *bool    `json:"stream,omitempty"`
 	Options *Options `json:"options,omitempty"`
+	Format  any      `json:"format,omitempty"`
 }
 
 // GenerateResponse is one NDJSON line for /api/generate.
@@ -110,11 +114,15 @@ type GenerateResponse struct {
 }
 
 // ChatRequest is the body for POST /api/chat.
+// Format, when set, constrains the model output to valid JSON.
+//   - "json" (string): any valid JSON object.
+//   - A JSON Schema object: output is constrained to match the schema.
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   *bool     `json:"stream,omitempty"`
 	Options  *Options  `json:"options,omitempty"`
+	Format   any       `json:"format,omitempty"`
 }
 
 // ChatResponse is one NDJSON line for /api/chat.
