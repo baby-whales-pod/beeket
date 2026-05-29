@@ -68,11 +68,37 @@ type CopyRequest struct {
 
 // --- Inference types ---
 
+// ToolCallFunction is the function portion of a tool call.
+type ToolCallFunction struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+}
+
+// ToolCall is a single tool invocation emitted by the model.
+type ToolCall struct {
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolFunction describes the callable function inside a tool definition.
+type ToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"` // JSON schema
+}
+
+// Tool is a function definition provided by the client.
+type Tool struct {
+	Type     string       `json:"type"` // "function"
+	Function ToolFunction `json:"function"`
+}
+
 // Message is a chat message (role + content).
 type Message struct {
-	Role    string   `json:"role"`
-	Content string   `json:"content"`
-	Images  []string `json:"images,omitempty"` // base64-encoded
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	Images    []string   `json:"images,omitempty"`     // base64-encoded
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // populated for assistant tool-call messages
+	ToolName  string     `json:"tool_name,omitempty"`  // populated for role=tool result messages
 }
 
 // Options holds per-request sampler and runtime overrides.
@@ -120,9 +146,10 @@ type GenerateResponse struct {
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
+	Tools    []Tool    `json:"tools,omitempty"`
 	Stream   *bool     `json:"stream,omitempty"`
+	Format   any       `json:"format,omitempty"` // "json" or JSON schema
 	Options  *Options  `json:"options,omitempty"`
-	Format   any       `json:"format,omitempty"`
 }
 
 // ChatResponse is one NDJSON line for /api/chat.
@@ -131,6 +158,7 @@ type ChatResponse struct {
 	CreatedAt     string  `json:"created_at"`
 	Message       Message `json:"message"`
 	Done          bool    `json:"done"`
+	DoneReason    string  `json:"done_reason,omitempty"`
 	TotalDuration int64   `json:"total_duration,omitempty"`
 	EvalCount     int     `json:"eval_count,omitempty"`
 	EvalDuration  int64   `json:"eval_duration,omitempty"`

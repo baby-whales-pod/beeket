@@ -169,14 +169,28 @@ type GenerateOptions struct {
 	StopStrings []string
 	Sampler     SamplerOptions
 	// GrammarStr, if non-empty, is a GBNF grammar string that constrains
-	// the output tokens to valid productions of the grammar.
+	// the output tokens to valid productions of the grammar (used by
+	// structured output via the format field).
 	GrammarStr string
+	// Grammar is a GBNF grammar string for tool calling. When set, an
+	// additional grammar sampler is built per-request with lazy trigger support.
+	Grammar string
+	// GrammarLazy, when non-empty, activates lazy-trigger mode: the grammar
+	// only kicks in once one of these patterns is sampled (e.g. "\{").
+	GrammarLazy []string
 }
 
 // Generate tokenises prompt and streams generated text pieces to out.
 // It respects ctx cancellation between decode calls.
-// If opts.GrammarStr is set, a temporary per-request sampler with a grammar
-// constraint is built and used (then freed), leaving the session sampler unchanged.
+//
+// Grammar priority:
+//   - opts.Grammar + opts.GrammarLazy → lazy-trigger per-request grammar sampler
+//     (used by tool calling)
+//   - opts.GrammarStr → per-request grammar sampler without lazy trigger
+//     (used by structured output via the format field)
+//
+// The per-request sampler is freed after generation; the session sampler is
+// left unchanged.
 func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOptions, out func(piece string) error) error {
 	tokens := llama.Tokenize(s.model.vocab, prompt, true, false)
 	batch := llama.BatchGetOne(tokens)
@@ -186,17 +200,33 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 		nPredict = 512
 	}
 
-	// Build a per-request sampler if a grammar constraint is requested.
-	// This avoids mutating the shared session sampler.
-	sampler := s.sampler
-	if opts.GrammarStr != "" {
+	// Build a per-request sampler when a grammar constraint is requested.
+	// Tool calling uses Grammar+GrammarLazy (lazy trigger).
+	// Structured output uses GrammarStr (eager).
+	// Both avoid mutating the shared session sampler.
+	activeSampler := s.sampler
+	var requestSampler llama.Sampler
+	switch {
+	case opts.Grammar != "":
 		var err error
-		sampler, err = buildSampler(opts.Sampler, s.model.vocab, opts.GrammarStr)
+		requestSampler, err = buildSamplerWithGrammar(opts.Sampler, s.model.vocab, opts.Grammar, opts.GrammarLazy)
+		if err != nil {
+			return fmt.Errorf("engine: %w", err)
+		}
+		activeSampler = requestSampler
+	case opts.GrammarStr != "":
+		var err error
+		requestSampler, err = buildSampler(opts.Sampler, s.model.vocab, opts.GrammarStr)
 		if err != nil {
 			return err
 		}
-		defer llama.SamplerFree(sampler)
+		activeSampler = requestSampler
 	}
+	defer func() {
+		if requestSampler != 0 {
+			llama.SamplerFree(requestSampler)
+		}
+	}()
 
 	var buf [256]byte
 	var generated strings.Builder
@@ -213,8 +243,8 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 		}
 		pos += batch.NTokens
 
-		token := llama.SamplerSample(sampler, s.ctx, -1)
-		llama.SamplerAccept(sampler, token)
+		token := llama.SamplerSample(activeSampler, s.ctx, -1)
+		llama.SamplerAccept(activeSampler, token)
 
 		if llama.VocabIsEOG(s.model.vocab, token) {
 			break
@@ -368,6 +398,36 @@ func l2Normalize(v []float32) {
 // -------------------------------------------------------------------
 // Chat template helper
 // -------------------------------------------------------------------
+
+// buildSamplerWithGrammar constructs a full sampler chain including a
+// grammar constraint with optional lazy-trigger patterns.
+// When lazyPatterns is non-empty, SamplerInitGrammarLazyPatterns is used
+// so the grammar only activates once one of the trigger patterns is emitted.
+// Returns an error if the grammar sampler cannot be initialised (returns 0).
+func buildSamplerWithGrammar(opts SamplerOptions, vocab llama.Vocab, grammar string, lazyPatterns []string) (llama.Sampler, error) {
+	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
+	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
+	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
+	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
+	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
+	if len(lazyPatterns) > 0 {
+		grammarSampler := llama.SamplerInitGrammarLazyPatterns(vocab, grammar, "root", lazyPatterns, nil)
+		if grammarSampler == 0 {
+			llama.SamplerFree(chain)
+			return 0, fmt.Errorf("failed to initialise lazy grammar sampler")
+		}
+		llama.SamplerChainAdd(chain, grammarSampler)
+	} else {
+		grammarSampler := llama.SamplerInitGrammar(vocab, grammar, "root")
+		if grammarSampler == 0 {
+			llama.SamplerFree(chain)
+			return 0, fmt.Errorf("failed to initialise grammar sampler")
+		}
+		llama.SamplerChainAdd(chain, grammarSampler)
+	}
+	llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
+	return chain, nil
+}
 
 // ApplyChatTemplate applies the model's chat template to messages and returns the prompt string.
 func (s *Session) ApplyChatTemplate(messages []llama.ChatMessage) (string, error) {
