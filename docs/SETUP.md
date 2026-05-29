@@ -23,12 +23,12 @@ This guide walks you through installing prerequisites, building Beeket from sour
 
 ### Go
 
-Beeket requires **Go 1.22 or later**.
+Beeket requires **Go 1.25 or later**.
 
 ```bash
 # Check your installed version
 go version
-# Expected output: go version go1.22.x ...
+# Expected output: go version go1.25.x ...
 ```
 
 Download Go from https://go.dev/dl/ if needed. The `go.mod` declares the minimum version; `go mod tidy` will tell you if yours is too old.
@@ -541,9 +541,9 @@ export YZMA_LIB=/path/to/lib
 beeket serve --auto-install-lib
 ```
 
-### `go: requires go >= 1.22`
+### `go: requires go >= 1.25`
 
-Update Go to 1.22 or later from https://go.dev/dl/.
+Update Go to 1.25 or later from https://go.dev/dl/.
 
 ### `bind: address already in use`
 

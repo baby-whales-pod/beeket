@@ -88,7 +88,7 @@ beeket serve --port 11435 --log-level debug --backend cuda
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.25+
 - A llama.cpp shared library (`libllama.so` / `libllama.dylib` / `llama.dll`).
   Set `YZMA_LIB` or `--lib-dir` to point to it.
 
