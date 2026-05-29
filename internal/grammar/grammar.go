@@ -461,14 +461,18 @@ func (c *converter) visitEnum(rawEnum any, name string) (string, error) {
 
 // sharedPrimitives is appended to every generated grammar. It provides
 // the base rules that generated rules reference.
+// All inline repetition groups (`(...)* ` and `(...)?`) that llama.cpp's
+// GBNF parser may not handle correctly are replaced with recursive named rules.
 const sharedPrimitives = `boolean ::= "true" | "false"
 integer ::= "-"? ([0-9] | [1-9] [0-9]*)
 null    ::= "null"
 number  ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? (([eE] [-+]? [0-9]+))?
 string  ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
 value   ::= object-generic | array-generic | string | number | boolean | null
-object-generic ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? "}"
-array-generic  ::= "[" ws (value ("," ws value)*)? "]"
+object-generic   ::= "{" ws object-pair-list "}" ws | "{" ws "}" ws
+object-pair-list ::= string ":" ws value | string ":" ws value "," ws object-pair-list
+array-generic    ::= "[" ws array-item-list "]" ws | "[" ws "]" ws
+array-item-list  ::= value | value "," ws array-item-list
 ws      ::= ([ \t\n] ws)?
 `
 
