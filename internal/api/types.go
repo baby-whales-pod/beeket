@@ -117,6 +117,10 @@ type Options struct {
 // Format, when set, constrains the model output to valid JSON.
 //   - "json" (string): any valid JSON object.
 //   - A JSON Schema object: output is constrained to match the schema.
+//
+// Think, when explicitly false, suppresses chain-of-thought / reasoning
+// output on models that support it (e.g. Qwen3, QwQ). Equivalent to
+// passing /no_think in the system prompt. Nil means "model default".
 type GenerateRequest struct {
 	Model   string   `json:"model"`
 	Prompt  string   `json:"prompt"`
@@ -124,6 +128,7 @@ type GenerateRequest struct {
 	Stream  *bool    `json:"stream,omitempty"`
 	Options *Options `json:"options,omitempty"`
 	Format  any      `json:"format,omitempty"`
+	Think   *bool    `json:"think,omitempty"`
 }
 
 // GenerateResponse is one NDJSON line for /api/generate.
@@ -143,6 +148,9 @@ type GenerateResponse struct {
 // Format, when set, constrains the model output to valid JSON.
 //   - "json" (string): any valid JSON object.
 //   - A JSON Schema object: output is constrained to match the schema.
+//
+// Think, when explicitly false, suppresses chain-of-thought / reasoning
+// output on models that support it (e.g. Qwen3, QwQ). Nil means "model default".
 type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
@@ -150,6 +158,7 @@ type ChatRequest struct {
 	Stream   *bool     `json:"stream,omitempty"`
 	Format   any       `json:"format,omitempty"` // "json" or JSON schema
 	Options  *Options  `json:"options,omitempty"`
+	Think    *bool     `json:"think,omitempty"`
 }
 
 // ChatResponse is one NDJSON line for /api/chat.
