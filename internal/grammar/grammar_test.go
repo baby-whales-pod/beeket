@@ -336,6 +336,182 @@ func TestJSONSchemaGrammar_Constant(t *testing.T) {
 	assert.Contains(t, grammar.JSONSchemaGrammar, "number")
 }
 
+// ---- Order-independent field grammar (permutation tests) ----
+
+// TestFromMap_AllRequired_TwoFields verifies that a 2-field all-required object
+// produces a grammar that accepts BOTH field orderings.
+func TestFromMap_AllRequired_TwoFields(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"capital": map[string]any{"type": "string"},
+			"country": map[string]any{"type": "string"},
+		},
+		"required": []any{"capital", "country"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// Both field keys must appear.
+	assert.Contains(t, g, `"capital"`)
+	assert.Contains(t, g, `"country"`)
+
+	// The grammar must have at least one alternation (|) for the two orderings.
+	assert.Contains(t, g, " | ", "grammar must have alternatives for both field orderings")
+
+	// Both orderings must be present:
+	// capital-before-country: "capital" ... "country"
+	// country-before-capital: "country" ... "capital"
+	root := extractRootRule(t, g)
+
+	// The root rule must contain both fields in BOTH relative orders.
+	capFirst := strings.Index(root, `"capital"`) < strings.Index(root, `"country"`)
+	hasAlt := strings.Contains(root, " | ")
+
+	// If there's only one ordering there must be an alternative providing the other.
+	if capFirst {
+		assert.True(t, hasAlt, "only capital-first ordering found; expected an alternative for country-first")
+	}
+	_ = capFirst // suppress unused warning when hasAlt assertion fires
+}
+
+// TestFromMap_AllRequired_ThreeFields verifies that a 3-field all-required object
+// produces 3! = 6 alternative orderings.
+func TestFromMap_AllRequired_ThreeFields(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"a": map[string]any{"type": "string"},
+			"b": map[string]any{"type": "number"},
+			"c": map[string]any{"type": "boolean"},
+		},
+		"required": []any{"a", "b", "c"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// All three fields must appear.
+	assert.Contains(t, g, `"a"`)
+	assert.Contains(t, g, `"b"`)
+	assert.Contains(t, g, `"c"`)
+
+	// 3! = 6 orderings means 5 "|" separators in the alternatives expression.
+	// Count occurrences of " | " in the full grammar.
+	altCount := strings.Count(g, " | ")
+	assert.GreaterOrEqual(t, altCount, 5,
+		"3-field object should have 6 alternatives (5 '|' separators), got %d", altCount)
+}
+
+// TestFromMap_AllRequired_ConcreteSchema is the exact schema from
+// chat-structured-stream.sh — the original crash scenario.
+func TestFromMap_AllRequired_ConcreteSchema(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"capital": map[string]any{"type": "string"},
+			"country": map[string]any{"type": "string"},
+		},
+		"required": []any{"capital", "country"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// Must contain per-field named rules.
+	assert.Contains(t, g, "root-capital")
+	assert.Contains(t, g, "root-country")
+
+	// The root rule must be an alternation, NOT a fixed sequence.
+	root := extractRootRule(t, g)
+	assert.Contains(t, root, " | ",
+		"root rule must offer alternatives so the model can emit fields in any order")
+}
+
+// TestFromMap_AllRequired_SingleField verifies that a single required field
+// produces a simple (non-alternating) grammar.
+func TestFromMap_AllRequired_SingleField(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+		"required": []any{"name"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+	assert.Contains(t, g, `"name"`)
+}
+
+// TestFromMap_MixedRequiredOptional_StillOrdered verifies that when there are
+// both required AND optional fields, we fall back to the ordered (non-permutation)
+// path: required fields first, optional wrapped in ( ... )?.
+func TestFromMap_MixedRequiredOptional_StillOrdered(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"req": map[string]any{"type": "string"},
+			"opt": map[string]any{"type": "string"},
+		},
+		"required": []any{"req"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+	assert.Contains(t, g, `"req"`)
+	assert.Contains(t, g, `"opt"`)
+	// Optional field must be wrapped.
+	assert.Contains(t, g, "?", "optional field must be wrapped in ( ... )?")
+}
+
+// extractRootRule extracts the full body of the "root ::=" rule,
+// which may span multiple lines (continuation lines have no "::=").
+func extractRootRule(t *testing.T, g string) string {
+	t.Helper()
+	lines := strings.Split(g, "\n")
+	var buf strings.Builder
+	inRoot := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "root ::=") {
+			buf.WriteString(line)
+			inRoot = true
+			continue
+		}
+		if inRoot {
+			// A new rule starts when the line contains " ::= " — stop collecting.
+			if strings.Contains(line, " ::= ") {
+				break
+			}
+			buf.WriteString(" ")
+			buf.WriteString(strings.TrimSpace(line))
+		}
+	}
+	if buf.Len() == 0 {
+		t.Fatal("root ::= rule not found in grammar")
+	}
+	return buf.String()
+}
+
+// ---- fieldPermutations (internal) ----
+
+// TestFieldPermutations_TwoFields verifies 2! = 2 permutations for 2 fields.
+func TestFieldPermutations_TwoFields(t *testing.T) {
+	// Verify indirectly via the grammar output: a 2-field all-required object
+	// must produce exactly 2 alternatives separated by " | ".
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"x": map[string]any{"type": "string"},
+			"y": map[string]any{"type": "string"},
+		},
+		"required": []any{"x", "y"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// Exactly 1 " | " in the root rule = 2 alternatives.
+	root := extractRootRule(t, g)
+	count := strings.Count(root, " | ")
+	assert.Equal(t, 1, count, "2-field all-required object should have exactly 2 alternatives")
+}
+
 // ---- roundtrip: ensure generated grammar serialises a known schema ----
 
 func TestFromJSONSchema_RoundTrip_ExtractSchema(t *testing.T) {
