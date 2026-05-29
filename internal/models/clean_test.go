@@ -42,6 +42,16 @@ func TestCleanModelRef_HFQuantShorthand(t *testing.T) {
 			wantName: "mistral-7b-v2",
 			wantTag:  "q4_k_m",
 		},
+		{
+			// Mixtral-8x7B-Instruct-v0.1-GGUF: Instruct is NOT stripped because
+			// "-v0.1" (digit-containing) sits between it and "-GGUF". The regex
+			// only strips one trailing alpha segment, and "-v0.1" breaks the chain.
+			// Real filenames: mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf — "instruct"
+			// IS part of the real filename, so this behaviour is correct.
+			ref:      "hf.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF:Q4_K_M",
+			wantName: "mixtral-8x7b-instruct-v0.1",
+			wantTag:  "q4_k_m",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.ref, func(t *testing.T) {
@@ -54,9 +64,16 @@ func TestCleanModelRef_HFQuantShorthand(t *testing.T) {
 
 func TestCleanModelRef_HFExplicitFile(t *testing.T) {
 	name, tag := CleanModelRef("hf.co/unsloth/Qwen3.5-0.8B-MTP-GGUF/Qwen3.5-0.8B-Q4_K_M.gguf")
-	// For explicit file form, name comes from the repo (same stripping), tag from filename stem.
 	assert.Equal(t, "qwen3.5-0.8b", name)
 	assert.Equal(t, "qwen3.5-0.8b-q4_k_m", tag)
+}
+
+func TestCleanModelRef_HFExplicitFile_NestedPath(t *testing.T) {
+	// File under a subdirectory — tag must be slash-free.
+	name, tag := CleanModelRef("hf.co/org/Model-GGUF/subdir/model-Q4_K_M.gguf")
+	assert.Equal(t, "model", name)
+	assert.Equal(t, "model-q4_k_m", tag)
+	assert.NotContains(t, tag, "/", "tag must be slash-free for nested paths")
 }
 
 func TestCleanModelRef_HFBareRepo(t *testing.T) {
@@ -83,17 +100,19 @@ func TestCleanModelRef_BareName(t *testing.T) {
 	assert.Equal(t, "latest", tag)
 }
 
-// TestCleanModelRef_NoSlashes verifies the name is always slash-free,
-// which is the core invariant needed by store.WriteManifest.
+// TestCleanModelRef_NoSlashes verifies both name and tag are always slash-free —
+// the core invariant required by store.WriteManifest.
 func TestCleanModelRef_NoSlashes(t *testing.T) {
 	inputs := []string{
 		"hf.co/unsloth/Qwen3.5-0.8B-MTP-GGUF:Q4_K_M",
 		"hf.co/bartowski/Llama-3-8B-Instruct-GGUF:Q5_K_M",
 		"https://huggingface.co/org/repo/resolve/main/model.gguf",
 		"hf.co/org/repo/model.gguf",
+		"hf.co/org/Model-GGUF/subdir/model-Q4_K_M.gguf",
 	}
 	for _, ref := range inputs {
-		name, _ := CleanModelRef(ref)
+		name, tag := CleanModelRef(ref)
 		assert.NotContains(t, name, "/", "name must be slash-free for ref=%q", ref)
+		assert.NotContains(t, tag, "/", "tag must be slash-free for ref=%q", ref)
 	}
 }

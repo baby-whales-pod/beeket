@@ -57,10 +57,10 @@ func (h *Handler) Pull(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Derive a clean slash-free registry key for the manifest store.
-	// models.CleanModelRef normalises hf.co/org/repo:quant and HTTPS URLs
-	// into a simple name:tag pair that ListManifests can find.
-	registryName, registryTag := models.CleanModelRef(req.Name)
+	// Resolve model name → clean (name, tag) registry key + download URL.
+	// mgr.Resolve now calls CleanModelRef internally, so the result is always
+	// slash-free and safe for the manifest store.
+	registryName, registryTag := h.mgr.Resolve(req.Name)
 	emit("resolving manifest", "", 0, 0)
 
 	var dlURL string
