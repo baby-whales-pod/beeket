@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 	"github.com/baby-whales-pod/beeket/internal/download"
 	"github.com/baby-whales-pod/beeket/internal/engine"
-	"github.com/baby-whales-pod/beeket/internal/grammar"
+	"github.com/baby-whales-pod/beeket/internal/jsongrammar"
 	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 	"github.com/baby-whales-pod/beeket/internal/scheduler"
@@ -287,21 +288,12 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	opts := buildGenerateOptions(req.Options)
 
 	// Resolve grammar constraint from the format field.
-	// Use lazy grammar (trigger on "{") so the grammar sampler only activates
-	// when the model begins generating the JSON object. This avoids the need
-	// to prefill the sampler with prompt tokens, which would require
-	// parseSpecial=true in Tokenize to match the KV-cache token sequence.
-	grammarStr, err := resolveGrammar(req.Format)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	grammarStr, schemaToValidateGen, fmtErr := resolveFormat(req.Format)
+	if fmtErr != nil {
+		writeError(w, http.StatusBadRequest, fmtErr.Error())
 		return
 	}
 	if grammarStr != "" {
-		// Use eager grammar (GrammarStr): the sampler is active from token 0 of
-		// generation and forces the model to start with '{'. The lazy trigger path
-		// (Grammar + GrammarLazy) was broken because it fired on multi-character
-		// tokens like {" (token 4754), causing a grammar-stack crash in SamplerAccept.
-		// The eager path is safe now that PR #53 fixed the quoted JSON keys in GBNF.
 		opts.GrammarStr = grammarStr
 	}
 
@@ -335,12 +327,14 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	nw := NewNDJSONWriter(w)
 	evalCount := 0
 	var firstTokenAt time.Time
+	var responseBuilder strings.Builder // collect full response for schema validation
 
 	genErr := h.sched.Generate(r.Context(), name, tag, prompt, opts, func(piece string) error {
 		if evalCount == 0 {
 			firstTokenAt = time.Now()
 		}
 		evalCount++
+		responseBuilder.WriteString(piece)
 		if stream {
 			return nw.Write(GenerateResponse{
 				Model:     req.Model,
@@ -366,6 +360,15 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	if genErr != nil && r.Context().Err() == nil {
 		writeError(w, http.StatusInternalServerError, genErr.Error())
 		return
+	}
+
+	// Validate response against JSON schema if one was provided.
+	if schemaToValidateGen != nil {
+		if vErr := jsongrammar.ValidateSchema(schemaToValidateGen, strings.TrimSpace(responseBuilder.String())); vErr != nil {
+			slog.Warn("generate: schema validation failed, returning error", "err", vErr)
+			writeError(w, http.StatusUnprocessableEntity, "response did not match the requested JSON schema: "+vErr.Error())
+			return
+		}
 	}
 
 	total := dur.Nanoseconds()
@@ -454,15 +457,17 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Resolve grammar and thinking suppression BEFORE building the prompt,
 	// because injectNoThink modifies effectiveMsgs (adds/prepends system message).
 	var chatGrammarStr string
+	var schemaToValidateChat map[string]any
 	if hasTools {
 		// Grammar will be re-resolved below after opts is built; skip here.
 	} else {
-		g, gErr := resolveGrammar(req.Format)
+		g, sc, gErr := resolveFormat(req.Format)
 		if gErr != nil {
 			writeError(w, http.StatusBadRequest, gErr.Error())
 			return
 		}
 		chatGrammarStr = g
+		schemaToValidateChat = sc
 	}
 
 	// Suppress thinking mode when:
@@ -551,6 +556,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	output := sb.String()
 	total := dur.Nanoseconds()
+
+	// Validate response against JSON schema if one was provided (non-tool-call path).
+	if schemaToValidateChat != nil && !hasTools {
+		if vErr := jsongrammar.ValidateSchema(schemaToValidateChat, strings.TrimSpace(output)); vErr != nil {
+			slog.Warn("chat: schema validation failed, returning error", "err", vErr)
+			writeError(w, http.StatusUnprocessableEntity, "response did not match the requested JSON schema: "+vErr.Error())
+			return
+		}
+	}
 
 	// Attempt to parse a tool call when tools were requested.
 	if hasTools {
@@ -826,29 +840,27 @@ func inferenceOutcome(ctx interface{ Err() error }, err error) string {
 	return metrics.OutcomeError
 }
 
-// resolveGrammar converts the request's Format field to a GBNF grammar string.
+// resolveFormat parses the request's Format field and returns:
+//   - grammar: the GBNF grammar string to constrain generation (always jsongrammar.JSONGrammar when format != nil)
+//   - schema: the JSON Schema map to validate against after generation (nil if format is just "json")
+//   - err: parse error
 //
-//   - nil or missing: no constraint (empty string returned)
-//   - string "json":  generic JSON grammar
-//   - map (JSON Schema): converted to GBNF via the grammar package
-func resolveGrammar(format any) (string, error) {
+// Using a single canonical JSON grammar for all format variants avoids the
+// persistent NFA crashes that resulted from hand-crafted per-schema GBNF.
+func resolveFormat(format any) (grammar string, schema map[string]any, err error) {
 	if format == nil {
-		return "", nil
+		return "", nil, nil
 	}
 	switch v := format.(type) {
 	case string:
 		if v == "json" {
-			return grammar.JSONSchemaGrammar, nil
+			return jsongrammar.JSONGrammar, nil, nil
 		}
-		return "", fmt.Errorf("unsupported format value %q; use \"json\" or a JSON Schema object", v)
+		return "", nil, fmt.Errorf("unsupported format value %q; use \"json\" or a JSON Schema object", v)
 	case map[string]any:
-		gstr, err := grammar.FromMap(v)
-		if err != nil {
-			return "", fmt.Errorf("invalid JSON Schema in format field: %w", err)
-		}
-		return gstr, nil
+		return jsongrammar.JSONGrammar, v, nil
 	default:
-		return "", fmt.Errorf("format must be \"json\" or a JSON Schema object")
+		return "", nil, fmt.Errorf("format must be \"json\" or a JSON Schema object")
 	}
 }
 

@@ -5,32 +5,34 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/baby-whales-pod/beeket/internal/grammar"
+	"github.com/baby-whales-pod/beeket/internal/jsongrammar"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// ---- resolveGrammar ----
+// ---- resolveFormat ----
 
-func TestResolveGrammar_Nil(t *testing.T) {
-	g, err := resolveGrammar(nil)
+func TestResolveFormat_Nil(t *testing.T) {
+	g, sc, err := resolveFormat(nil)
 	require.NoError(t, err)
 	assert.Empty(t, g)
+	assert.Nil(t, sc)
 }
 
-func TestResolveGrammar_JsonString(t *testing.T) {
-	g, err := resolveGrammar("json")
+func TestResolveFormat_JsonString(t *testing.T) {
+	g, sc, err := resolveFormat("json")
 	require.NoError(t, err)
-	assert.Equal(t, grammar.JSONSchemaGrammar, g)
+	assert.Equal(t, jsongrammar.JSONGrammar, g)
+	assert.Nil(t, sc, "no schema to validate for bare 'json' format")
 }
 
-func TestResolveGrammar_UnsupportedString(t *testing.T) {
-	_, err := resolveGrammar("xml")
+func TestResolveFormat_UnsupportedString(t *testing.T) {
+	_, _, err := resolveFormat("xml")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported format value")
 }
 
-func TestResolveGrammar_JSONSchemaMap(t *testing.T) {
+func TestResolveFormat_JSONSchemaMap(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -39,15 +41,17 @@ func TestResolveGrammar_JSONSchemaMap(t *testing.T) {
 		},
 		"required": []any{"name", "age"},
 	}
-	g, err := resolveGrammar(schema)
+	g, sc, err := resolveFormat(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, "root ::=")
-	assert.Contains(t, g, `"\"name\""`)
-	assert.Contains(t, g, `"\"age\""`)
+	// All schema formats now use the canonical JSON grammar.
+	assert.Equal(t, jsongrammar.JSONGrammar, g)
+	// Schema is returned for post-generation validation.
+	require.NotNil(t, sc)
+	assert.Equal(t, "object", sc["type"])
 }
 
-func TestResolveGrammar_InvalidType(t *testing.T) {
-	_, err := resolveGrammar(42)
+func TestResolveFormat_InvalidType(t *testing.T) {
+	_, _, err := resolveFormat(42)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "format must be")
 }
@@ -119,10 +123,9 @@ func TestGenerateRequest_Decode_NoFormat(t *testing.T) {
 	assert.Nil(t, req.Format)
 }
 
-// ---- resolveGrammar via roundtrip ----
+// ---- resolveFormat via roundtrip ----
 
-func TestResolveGrammar_FromDecodedRequest(t *testing.T) {
-	// Simulate a real chat request with format as JSON Schema.
+func TestResolveFormat_FromDecodedRequest(t *testing.T) {
 	body := `{
 		"model": "smollm2:135m",
 		"messages": [{"role": "user", "content": "Name a city"}],
@@ -134,8 +137,11 @@ func TestResolveGrammar_FromDecodedRequest(t *testing.T) {
 	}`
 	var req ChatRequest
 	require.NoError(t, json.NewDecoder(bytes.NewBufferString(body)).Decode(&req))
-	g, err := resolveGrammar(req.Format)
+	g, sc, err := resolveFormat(req.Format)
 	require.NoError(t, err)
-	assert.Contains(t, g, "root ::=")
-	assert.Contains(t, g, `"\"city\""`)
+	// Always uses canonical JSON grammar.
+	assert.Equal(t, jsongrammar.JSONGrammar, g)
+	// Schema is passed through for validation.
+	require.NotNil(t, sc)
+	assert.Equal(t, "object", sc["type"])
 }
