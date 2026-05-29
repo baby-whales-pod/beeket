@@ -105,22 +105,22 @@ type Message struct {
 // Field names and semantics match the Ollama API.
 type Options struct {
 	// Sampler parameters.
-	Temperature float32  `json:"temperature,omitempty"`
-	TopK        int32    `json:"top_k,omitempty"`
-	TopP        float32  `json:"top_p,omitempty"`
-	MinP        float32  `json:"min_p,omitempty"`
-	TypicalP    float32  `json:"typical_p,omitempty"`
-	TfsZ        float32  `json:"tfs_z,omitempty"` // Tail Free Sampling (no-op: not in yzma v1.13)
+	Temperature float32 `json:"temperature,omitempty"`
+	TopK        int32   `json:"top_k,omitempty"`
+	TopP        float32 `json:"top_p,omitempty"`
+	MinP        float32 `json:"min_p,omitempty"`
+	TypicalP    float32 `json:"typical_p,omitempty"`
+	TfsZ        float32 `json:"tfs_z,omitempty"` // Tail Free Sampling (no-op: not in yzma v1.13)
 
 	// Repetition / penalty parameters.
 	RepeatPenalty    float32 `json:"repeat_penalty,omitempty"`
-	RepeatLastN      int32   `json:"repeat_last_n,omitempty"`   // window for repeat penalty; -1 = full context
+	RepeatLastN      int32   `json:"repeat_last_n,omitempty"` // window for repeat penalty; -1 = full context
 	FrequencyPenalty float32 `json:"frequency_penalty,omitempty"`
 	PresencePenalty  float32 `json:"presence_penalty,omitempty"`
 	PenalizeNewline  *bool   `json:"penalize_newline,omitempty"` // accepted for compat; no-op
 
 	// Mirostat parameters (mutually exclusive with TopK/TopP; Mirostat > 0 enables).
-	Mirostat    int32   `json:"mirostat,omitempty"`    // 0=off, 1=Mirostat v1, 2=Mirostat v2
+	Mirostat    int32   `json:"mirostat,omitempty"`     // 0=off, 1=Mirostat v1, 2=Mirostat v2
 	MirostatTau float32 `json:"mirostat_tau,omitempty"` // target entropy (default 5.0)
 	MirostatEta float32 `json:"mirostat_eta,omitempty"` // learning rate (default 0.1)
 
