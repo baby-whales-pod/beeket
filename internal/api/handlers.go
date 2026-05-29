@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,11 +20,24 @@ import (
 	"github.com/hybridgroup/yzma/pkg/llama"
 )
 
+// embedScheduler is the interface the Embeddings handler needs from the scheduler.
+// Using an interface here allows the handler to be tested with a fake.
+type embedScheduler interface {
+	Embed(ctx context.Context, name, tag, input string) ([]float32, int, error)
+}
+
+// mgrResolver is the interface Embeddings needs from the model manager.
+type mgrResolver interface {
+	Resolve(ref string) (string, string)
+}
+
 // Handler holds all dependencies for API handlers.
 type Handler struct {
 	mgr         *models.Manager
+	embedMgr    mgrResolver    // points to mgr unless overridden in tests
 	store       *store.Store
 	sched       *scheduler.Scheduler
+	embedSched  embedScheduler // set to sched unless overridden in tests
 	ready       bool
 	startTime   time.Time
 	backend     string
@@ -51,8 +65,10 @@ func NewHandlerWithConfig(mgr *models.Manager, st *store.Store, sched *scheduler
 	}
 	return &Handler{
 		mgr:         mgr,
+		embedMgr:    mgr,
 		store:       st,
 		sched:       sched,
+		embedSched:  sched,
 		ready:       true,
 		startTime:   cfg.StartTime,
 		backend:     cfg.Backend,
@@ -251,7 +267,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stream := req.Stream == nil || *req.Stream
-	name, tag := h.mgr.Resolve(req.Model)
+	name, tag := h.embedMgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
@@ -328,7 +344,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stream := req.Stream == nil || *req.Stream
-	name, tag := h.mgr.Resolve(req.Model)
+	name, tag := h.embedMgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
@@ -383,7 +399,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Embeddings handles POST /api/embeddings.
+// Embeddings handles POST /api/embeddings and POST /api/embed.
 func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	var req EmbeddingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -395,32 +411,64 @@ func (h *Handler) Embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalise inputs: support string, []string (new style) and legacy "prompt".
 	var inputs []string
 	switch v := req.Input.(type) {
 	case string:
-		inputs = []string{v}
+		if v != "" {
+			inputs = []string{v}
+		}
 	case []any:
 		for _, item := range v {
-			if s, ok := item.(string); ok {
-				inputs = append(inputs, s)
+			s, ok := item.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "input array must contain only strings")
+				return
 			}
+			inputs = append(inputs, s)
 		}
+	case nil:
+		// fall through to legacy prompt below
 	default:
 		writeError(w, http.StatusBadRequest, "input must be a string or array of strings")
 		return
 	}
+	// Legacy single-input via "prompt" field.
+	if len(inputs) == 0 && req.Prompt != "" {
+		inputs = []string{req.Prompt}
+	}
+	if len(inputs) == 0 {
+		writeError(w, http.StatusBadRequest, "input or prompt is required")
+		return
+	}
 
-	// Embeddings require a dedicated embedding context (NUBatch + pooling).
-	// For v0.1 we return a stub response with zero vectors so the API
-	// contract is satisfied and callers can integrate.
-	resp := EmbeddingsResponse{
-		Model:      req.Model,
-		Embeddings: make([][]float32, len(inputs)),
+	name, tag := h.embedMgr.Resolve(req.Model)
+	modelKey := name + ":" + tag
+	start := time.Now()
+
+	vecs := make([][]float32, 0, len(inputs))
+	totalTokens := 0
+	for _, text := range inputs {
+		vec, n, err := h.embedSched.Embed(r.Context(), name, tag, text)
+		if err != nil {
+			outcome := inferenceOutcome(r.Context(), err)
+			metrics.InferenceRequestsTotal.WithLabelValues(modelKey, "embed", outcome).Inc()
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		vecs = append(vecs, vec)
+		totalTokens += n
 	}
-	for i := range resp.Embeddings {
-		resp.Embeddings[i] = []float32{}
-	}
-	writeJSON(w, http.StatusOK, resp)
+
+	metrics.InferenceRequestsTotal.WithLabelValues(modelKey, "embed", metrics.OutcomeSuccess).Inc()
+	metrics.InferenceEvalTokensTotal.WithLabelValues(modelKey).Add(float64(totalTokens))
+
+	writeJSON(w, http.StatusOK, EmbeddingsResponse{
+		Model:           req.Model,
+		Embeddings:      vecs,
+		TotalDuration:   time.Since(start).Nanoseconds(),
+		PromptEvalCount: totalTokens,
+	})
 }
 
 // ---- Operational ----

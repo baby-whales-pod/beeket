@@ -50,9 +50,11 @@ func (w *Worker) LastUsed() time.Time {
 // Scheduler manages all active workers and enforces max-loaded limits.
 type Scheduler struct {
 	mu          sync.Mutex
+	embedMu     sync.Mutex
 	eng         *engine.Engine
 	mgr         *models.Manager
-	workers     map[string]*Worker // key: "name:tag"
+	workers     map[string]*Worker       // key: "name:tag"
+	embedWorkers map[string]*EmbedWorker // key: "name:tag#embed"
 	maxLoaded   int
 	keepAlive   time.Duration
 	contextSize uint32
@@ -72,14 +74,15 @@ type Config struct {
 // New creates a Scheduler.
 func New(eng *engine.Engine, mgr *models.Manager, cfg Config) *Scheduler {
 	s := &Scheduler{
-		eng:         eng,
-		mgr:         mgr,
-		workers:     make(map[string]*Worker),
-		maxLoaded:   cfg.MaxLoaded,
-		keepAlive:   cfg.KeepAlive,
-		contextSize: cfg.ContextSize,
-		numParallel: cfg.NumParallel,
-		samplerOpts: cfg.SamplerOpts,
+		eng:          eng,
+		mgr:          mgr,
+		workers:      make(map[string]*Worker),
+		embedWorkers: make(map[string]*EmbedWorker),
+		maxLoaded:    cfg.MaxLoaded,
+		keepAlive:    cfg.KeepAlive,
+		contextSize:  cfg.ContextSize,
+		numParallel:  cfg.NumParallel,
+		samplerOpts:  cfg.SamplerOpts,
 	}
 	go s.evictionLoop()
 	return s
@@ -242,6 +245,15 @@ func (s *Scheduler) LoadedModels() []LoadedInfo {
 			LastUsed: w.LastUsed(),
 		})
 	}
+	s.embedMu.Lock()
+	for key, w := range s.embedWorkers {
+		out = append(out, LoadedInfo{
+			Name:     key,
+			Size:     w.manifest.Size,
+			LastUsed: w.LastUsed(),
+		})
+	}
+	s.embedMu.Unlock()
 	return out
 }
 
@@ -250,6 +262,191 @@ type LoadedInfo struct {
 	Name     string
 	Size     int64
 	LastUsed time.Time
+}
+
+// -------------------------------------------------------------------
+// Embedding worker
+// -------------------------------------------------------------------
+
+// EmbedWorker owns a dedicated EmbedSession for a model.
+type EmbedWorker struct {
+	mu        sync.Mutex
+	session   *engine.EmbedSession
+	model     *engine.Model
+	manifest  *models.Manifest
+	reqCh     chan *embedRequest
+	quit      chan struct{}
+	lastUsed  time.Time
+	keepAlive time.Duration
+}
+
+type embedRequest struct {
+	ctx   context.Context
+	text  string
+	out   chan embedResult
+}
+
+type embedResult struct {
+	vec    []float32
+	nTokens int
+	err    error
+}
+
+// LastUsed returns the embed worker's last-used timestamp under its mutex.
+func (w *EmbedWorker) LastUsed() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastUsed
+}
+
+// Embed enqueues an embedding request and waits for the result.
+func (s *Scheduler) Embed(ctx context.Context, name, tag, input string) ([]float32, int, error) {
+	w, err := s.getOrLoadEmbedWorker(name, tag)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req := &embedRequest{
+		ctx:  ctx,
+		text: input,
+		out:  make(chan embedResult, 1),
+	}
+
+	select {
+	case w.reqCh <- req:
+	default:
+		return nil, 0, fmt.Errorf("scheduler: embed worker %s:%s queue full", name, tag)
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	case res := <-req.out:
+		return res.vec, res.nTokens, res.err
+	}
+}
+
+// getOrLoadEmbedWorker returns the embed worker for name:tag, loading it if needed.
+func (s *Scheduler) getOrLoadEmbedWorker(name, tag string) (*EmbedWorker, error) {
+	key := name + ":" + tag + "#embed"
+
+	s.embedMu.Lock()
+	if w, ok := s.embedWorkers[key]; ok {
+		s.embedMu.Unlock()
+		return w, nil
+	}
+	// Enforce max loaded across both maps.
+	s.mu.Lock()
+	total := len(s.workers) + len(s.embedWorkers)
+	s.mu.Unlock()
+	for total >= s.maxLoaded {
+		s.embedMu.Unlock()
+		evictedEmbed := s.evictLRUEmbed()
+		evictedGen := false
+		if !evictedEmbed {
+			s.mu.Lock()
+			evictedGen = s.evictLRU()
+			s.mu.Unlock()
+		}
+		if !evictedEmbed && !evictedGen {
+			s.embedMu.Lock()
+			break
+		}
+		s.embedMu.Lock()
+		s.mu.Lock()
+		total = len(s.workers) + len(s.embedWorkers)
+		s.mu.Unlock()
+	}
+	s.embedMu.Unlock()
+
+	// Load the model outside locks.
+	mf, err := s.mgr.Get(name, tag)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: embed model %s:%s not found: %w", name, tag, err)
+	}
+	blobPath := s.mgr.BlobPath(mf)
+
+	loadStart := time.Now()
+	m, err := s.eng.LoadModel(blobPath)
+	if err != nil {
+		return nil, fmt.Errorf("scheduler: embed load model: %w", err)
+	}
+	esess, err := s.eng.NewEmbedSession(m, s.contextSize)
+	if err != nil {
+		m.Free()
+		return nil, fmt.Errorf("scheduler: embed new session: %w", err)
+	}
+	loadDur := time.Since(loadStart)
+
+	nw := &EmbedWorker{
+		session:   esess,
+		model:     m,
+		manifest:  mf,
+		reqCh:     make(chan *embedRequest, queueDepth),
+		quit:      make(chan struct{}),
+		lastUsed:  time.Now(),
+		keepAlive: s.keepAlive,
+	}
+
+	s.embedMu.Lock()
+	if existing, ok := s.embedWorkers[key]; ok {
+		// TOCTOU: another goroutine loaded it while we were outside the lock.
+		s.embedMu.Unlock()
+		esess.Free()
+		m.Free()
+		return existing, nil
+	}
+	s.embedWorkers[key] = nw
+	metrics.ModelLoadDuration.WithLabelValues(key).Observe(loadDur.Seconds())
+	s.embedMu.Unlock()
+
+	go nw.run()
+	slog.Info("scheduler: embed worker loaded", "model", key, "load_dur", loadDur)
+	return nw, nil
+}
+
+// evictLRUEmbed removes the least-recently-used embed worker.
+// Must NOT be called while holding embedMu.
+func (s *Scheduler) evictLRUEmbed() bool {
+	s.embedMu.Lock()
+	defer s.embedMu.Unlock()
+	var oldest *EmbedWorker
+	var oldestKey string
+	for k, w := range s.embedWorkers {
+		if oldest == nil || w.LastUsed().Before(oldest.LastUsed()) {
+			oldest = w
+			oldestKey = k
+		}
+	}
+	if oldest == nil {
+		return false
+	}
+	delete(s.embedWorkers, oldestKey)
+	metrics.ModelEvictionsTotal.WithLabelValues("lru").Inc()
+	go oldest.stop()
+	slog.Info("scheduler: embed worker evicted", "model", oldestKey)
+	return true
+}
+
+func (w *EmbedWorker) run() {
+	for {
+		select {
+		case <-w.quit:
+			return
+		case req := <-w.reqCh:
+			w.mu.Lock()
+			w.lastUsed = time.Now()
+			w.mu.Unlock()
+			vec, n, err := w.session.Embed(req.ctx, req.text)
+			req.out <- embedResult{vec: vec, nTokens: n, err: err}
+		}
+	}
+}
+
+func (w *EmbedWorker) stop() {
+	close(w.quit)
+	w.session.Free()
+	w.model.Free()
 }
 
 // run is the worker's main loop; processes requests one at a time.
