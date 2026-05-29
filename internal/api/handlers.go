@@ -301,9 +301,22 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in ECMAScript regex
 	}
 
+	// Suppress thinking mode when structured output is requested or think:false.
+	// For Generate, thinking suppression is handled via the System field.
+	needNoThinkGen := (grammarStr != "") || (req.Think != nil && !*req.Think)
+	systemMsg := req.System
+	if needNoThinkGen {
+		if systemMsg == "" {
+			systemMsg = noThinkSystemContent
+		} else {
+			systemMsg = noThinkSystemContent + "\n" + systemMsg
+		}
+		opts.StopStrings = append(opts.StopStrings, "</think>")
+	}
+
 	prompt := req.Prompt
-	if req.System != "" {
-		prompt = req.System + "\n\n" + prompt
+	if systemMsg != "" {
+		prompt = systemMsg + "\n\n" + prompt
 	}
 
 	start := time.Now()
@@ -426,6 +439,30 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		effectiveMsgs = req.Messages
 	}
 
+	// Resolve grammar and thinking suppression BEFORE building the prompt,
+	// because injectNoThink modifies effectiveMsgs (adds/prepends system message).
+	var chatGrammarStr string
+	if hasTools {
+		// Grammar will be re-resolved below after opts is built; skip here.
+	} else {
+		g, gErr := resolveGrammar(req.Format)
+		if gErr != nil {
+			writeError(w, http.StatusBadRequest, gErr.Error())
+			return
+		}
+		chatGrammarStr = g
+	}
+
+	// Suppress thinking mode when:
+	//   a) structured output is requested (format != nil), OR
+	//   b) the caller explicitly sets think:false.
+	// Modifies effectiveMsgs, so must happen before h.chatPrompt().
+	needNoThink := (chatGrammarStr != "") || (req.Think != nil && !*req.Think)
+	var chatOpts engine.GenerateOptions // built below; passed by pointer to injectNoThink
+	if needNoThink {
+		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts)
+	}
+
 	prompt, err := h.chatPrompt(effectiveMsgs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -442,6 +479,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	name, tag := h.mgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
+	// Merge any stop strings injected by injectNoThink (e.g. "</think>").
+	opts.StopStrings = append(opts.StopStrings, chatOpts.StopStrings...)
 
 	if hasTools {
 		// Tool calling: use Grammar+GrammarLazy (lazy trigger).
@@ -452,20 +491,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.Grammar = grammarStr
 		opts.GrammarLazy = []string{lazyTrigger}
-	} else {
-		// Structured output: use lazy grammar (trigger on "{") so the grammar
-		// sampler only activates when the model starts generating JSON.
-		// This avoids the prompt-token prefill problem where Tokenize with
-		// parseSpecial=false produces different token IDs than the KV cache.
-		grammarStr, gErr := resolveGrammar(req.Format)
-		if gErr != nil {
-			writeError(w, http.StatusBadRequest, gErr.Error())
-			return
-		}
-		if grammarStr != "" {
-			opts.Grammar = grammarStr
-			opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in ECMAScript regex
-		}
+	} else if chatGrammarStr != "" {
+		// Structured output: lazy grammar (trigger on "{") activates only when
+		// the model starts generating JSON, avoiding the prefill-token mismatch.
+		opts.Grammar = chatGrammarStr
+		opts.GrammarLazy = []string{`\{`} // regex-escaped: { is a quantifier in ECMAScript regex
 	}
 
 	start := time.Now()
@@ -781,4 +811,46 @@ func resolveGrammar(format any) (string, error) {
 	default:
 		return "", fmt.Errorf("format must be \"json\" or a JSON Schema object")
 	}
+}
+
+// noThinkSystemContent is the system message injected when thinking must be suppressed.
+// "/no_think" is the Qwen3/QwQ control token that disables chain-of-thought output.
+// The JSON instruction is a belt-and-suspenders hint for all models.
+const noThinkSystemContent = "/no_think\nYou must respond ONLY with valid JSON. No explanations, no reasoning, no prose."
+
+// injectNoThink prepends "/no_think" to the system message in msgs (or inserts
+// a new system message at the front). This suppresses thinking-model reasoning
+// blocks (e.g. Qwen3 <think>…</think>) that would otherwise appear before the
+// JSON output and prevent the lazy grammar trigger from firing.
+//
+// It also adds "</think>" to opts.StopStrings as a safety net: if the model
+// still emits a thinking block despite /no_think, generation stops before any
+// post-think prose can appear.
+func injectNoThink(msgs []Message, opts *engine.GenerateOptions) []Message {
+	result := make([]Message, len(msgs))
+	copy(result, msgs)
+
+	found := false
+	for i, m := range result {
+		if m.Role == "system" {
+			result[i].Content = noThinkSystemContent + "\n" + m.Content
+			found = true
+			break
+		}
+	}
+	if !found {
+		newMsgs := make([]Message, 0, len(result)+1)
+		newMsgs = append(newMsgs, Message{Role: "system", Content: noThinkSystemContent})
+		newMsgs = append(newMsgs, result...)
+		result = newMsgs
+	}
+
+	// Safety net: stop generation at </think> in case the model still emits it.
+	for _, s := range opts.StopStrings {
+		if s == "</think>" {
+			return result // already present
+		}
+	}
+	opts.StopStrings = append(opts.StopStrings, "</think>")
+	return result
 }
