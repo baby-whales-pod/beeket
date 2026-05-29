@@ -32,6 +32,11 @@ null ::= "null"
 ws ::= ([ \t\n] ws)?
 `
 
+// maxPermutationFields is the maximum number of all-required fields for which
+// we generate full N! permutations. Beyond this we fall back to ordered output
+// to avoid exponential grammar size.
+const maxPermutationFields = 6
+
 // FromJSONSchema converts a JSON Schema (as raw bytes) to a GBNF grammar string.
 // Returns JSONSchemaGrammar if schema is empty.
 func FromJSONSchema(schemaBytes []byte) (string, error) {
@@ -178,8 +183,7 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		}
 	}
 
-	// Sort properties for deterministic output: required first, then optional,
-	// each group sorted alphabetically.
+	// Sort properties for deterministic output.
 	keys := make([]string, 0, len(props))
 	for k := range props {
 		keys = append(keys, k)
@@ -196,10 +200,92 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		}
 	}
 
+	// Fast path: all fields are required and there are few enough to enumerate
+	// all N! orderings. This ensures the grammar accepts ANY field order that
+	// the model might generate, preventing "empty grammar stack" crashes when
+	// the model produces fields in a different order than the schema lists them.
+	if len(optKeys) == 0 && len(reqKeys) >= 1 && len(reqKeys) <= maxPermutationFields {
+		return c.visitObjectAllRequired(props, reqKeys, name)
+	}
+
+	// General path: mixed required + optional fields, or too many required
+	// fields to enumerate permutations. Required fields are emitted in sorted
+	// order; optional fields are wrapped in ( ... )?.
+	return c.visitObjectMixed(props, reqKeys, optKeys, name)
+}
+
+// visitObjectAllRequired generates a grammar that accepts any field ordering
+// for an object where every declared property is required.
+//
+// For N fields it emits N! alternative sequences as named per-field rules:
+//
+//	root-capital ::= "\"capital\"" ws ":" ws string
+//	root-country ::= "\"country\"" ws ":" ws string
+//	root ::= "{" ws ( root-capital "," ws root-country
+//	                | root-country "," ws root-capital ) "}" ws
+func (c *converter) visitObjectAllRequired(
+	props map[string]any,
+	keys []string, // sorted, all required
+	name string,
+) (string, error) {
+	// Build a named per-field rule for each property so each appears once in
+	// the grammar output regardless of how many permutations reference it.
+	fieldRules := make(map[string]string, len(keys)) // key → rule name
+	for _, k := range keys {
+		propSchema, ok := props[k].(map[string]any)
+		if !ok {
+			propSchema = map[string]any{}
+		}
+		childName := sanitizeName(name + "-" + k)
+		expr, err := c.visit(propSchema, childName)
+		if err != nil {
+			return "", err
+		}
+		if isComplex(expr) && !isPrimitive(expr) {
+			expr = c.addRule(childName, expr)
+		}
+		keyLit, _ := json.Marshal(k)
+		fieldBody := fmt.Sprintf(`%s ws ":" ws %s`, string(keyLit), expr)
+		fieldRules[k] = c.addRule(childName, fieldBody)
+	}
+
+	// Generate all N! orderings.
+	perms := fieldPermutations(keys)
+	alts := make([]string, 0, len(perms))
+	for _, perm := range perms {
+		parts := make([]string, len(perm))
+		for i, k := range perm {
+			if i == 0 {
+				parts[i] = fieldRules[k]
+			} else {
+				parts[i] = `"," ws ` + fieldRules[k]
+			}
+		}
+		alts = append(alts, strings.Join(parts, " "))
+	}
+
+	var body string
+	if len(alts) == 1 {
+		body = `"{" ws ` + alts[0] + ` "}" ws`
+	} else {
+		body = `"{" ws ( ` + strings.Join(alts, "\n            | ") + ` ) "}" ws`
+	}
+
+	ruleName := c.addRule(name, body)
+	return ruleName, nil
+}
+
+// visitObjectMixed generates a grammar for objects with a mix of required and
+// optional fields, or objects with more than maxPermutationFields required
+// fields. Required fields are emitted in sorted order (no permutations).
+// Optional fields are wrapped in ( ... )?.
+func (c *converter) visitObjectMixed(
+	props map[string]any,
+	reqKeys, optKeys []string,
+	name string,
+) (string, error) {
 	var parts []string
 
-	// Emit required properties. The very first required property has no
-	// leading comma; all subsequent required properties do.
 	for i, k := range reqKeys {
 		propSchema, ok := props[k].(map[string]any)
 		if !ok {
@@ -222,10 +308,6 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		}
 	}
 
-	// Emit optional properties. Each is wrapped in ( ... )? so it may be
-	// absent. When required properties precede them they also need a comma
-	// inside the optional group; when no required property precedes them the
-	// first optional prop has no comma and subsequent ones do.
 	for i, k := range optKeys {
 		propSchema, ok := props[k].(map[string]any)
 		if !ok {
@@ -242,9 +324,6 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		keyLit, _ := json.Marshal(k)
 		pair := fmt.Sprintf("%s \":\" ws %s", string(keyLit), expr)
 
-		// A comma is needed when this optional prop is not the very first
-		// element overall (either required props exist, or a previous
-		// optional prop exists).
 		needComma := len(reqKeys) > 0 || i > 0
 		if needComma {
 			parts = append(parts, `( "," ws `+pair+` )?`)
@@ -261,6 +340,41 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 
 	ruleName := c.addRule(name, body)
 	return ruleName, nil
+}
+
+// fieldPermutations returns all permutations of keys in lexicographic order
+// of the permutations themselves (for deterministic grammar output).
+func fieldPermutations(keys []string) [][]string {
+	if len(keys) == 0 {
+		return [][]string{{}}
+	}
+	if len(keys) == 1 {
+		return [][]string{{keys[0]}}
+	}
+	result := make([][]string, 0)
+	// Heap's algorithm for deterministic permutation generation.
+	// We work on a copy to avoid mutating the caller's slice.
+	work := make([]string, len(keys))
+	copy(work, keys)
+	var generate func(k int)
+	generate = func(k int) {
+		if k == 1 {
+			perm := make([]string, len(work))
+			copy(perm, work)
+			result = append(result, perm)
+			return
+		}
+		for i := 0; i < k; i++ {
+			generate(k - 1)
+			if k%2 == 0 {
+				work[i], work[k-1] = work[k-1], work[i]
+			} else {
+				work[0], work[k-1] = work[k-1], work[0]
+			}
+		}
+	}
+	generate(len(work))
+	return result
 }
 
 func (c *converter) visitArray(schema map[string]any, name string) (string, error) {
@@ -323,8 +437,6 @@ func (c *converter) visitEnum(rawEnum any, name string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("grammar: marshal enum value: %w", err)
 		}
-		// lit is already a valid JSON-encoded value (e.g. `"red"`, `42`, `true`, `null`).
-		// In GBNF, string literals are written as double-quoted strings.
 		alternatives = append(alternatives, `"`+strings.ReplaceAll(string(lit), `"`, `\"`)+`"`)
 	}
 	return strings.Join(alternatives, " | "), nil
