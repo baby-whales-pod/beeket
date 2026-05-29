@@ -17,6 +17,7 @@ import (
 	"github.com/baby-whales-pod/beeket/internal/models"
 	"github.com/baby-whales-pod/beeket/internal/scheduler"
 	"github.com/baby-whales-pod/beeket/internal/store"
+	"github.com/baby-whales-pod/beeket/internal/tools"
 	"github.com/baby-whales-pod/beeket/internal/version"
 	"github.com/hybridgroup/yzma/pkg/llama"
 )
@@ -32,18 +33,30 @@ type mgrResolver interface {
 	Resolve(ref string) (string, string)
 }
 
+// generatorScheduler is the interface the Handler uses from the scheduler for
+// generation. Using an interface allows Chat/Generate handler tests to inject a fake.
+type generatorScheduler interface {
+	Generate(ctx context.Context, name, tag, prompt string, opts engine.GenerateOptions, out func(string) error) error
+	LoadedModels() []scheduler.LoadedInfo
+}
+
+// promptBuilderFunc converts a message list to a prompt string.
+// Injectable for testing so tests don't require the llama FFI library.
+type promptBuilderFunc func(msgs []Message) (string, error)
+
 // Handler holds all dependencies for API handlers.
 type Handler struct {
-	mgr         *models.Manager
-	embedMgr    mgrResolver // points to mgr unless overridden in tests
-	store       *store.Store
-	sched       *scheduler.Scheduler
-	embedSched  embedScheduler // set to sched unless overridden in tests
-	ready       bool
-	startTime   time.Time
-	backend     string
-	maxLoaded   int
-	numParallel int
+	mgr           *models.Manager
+	embedMgr      mgrResolver // points to mgr unless overridden in tests
+	store         *store.Store
+	sched         generatorScheduler
+	embedSched    embedScheduler // set to sched unless overridden in tests
+	ready         bool
+	startTime     time.Time
+	backend       string
+	maxLoaded     int
+	numParallel   int
+	promptBuilder promptBuilderFunc // defaults to buildChatPrompt; injectable for tests
 }
 
 // HandlerConfig carries optional configuration for NewHandler.
@@ -65,16 +78,17 @@ func NewHandlerWithConfig(mgr *models.Manager, st *store.Store, sched *scheduler
 		cfg.StartTime = time.Now()
 	}
 	return &Handler{
-		mgr:         mgr,
-		embedMgr:    mgr,
-		store:       st,
-		sched:       sched,
-		embedSched:  sched,
-		ready:       true,
-		startTime:   cfg.StartTime,
-		backend:     cfg.Backend,
-		maxLoaded:   cfg.MaxLoaded,
-		numParallel: cfg.NumParallel,
+		mgr:           mgr,
+		embedMgr:      mgr,
+		store:         st,
+		sched:         sched,
+		embedSched:    sched,
+		ready:         true,
+		startTime:     cfg.StartTime,
+		backend:       cfg.Backend,
+		maxLoaded:     cfg.MaxLoaded,
+		numParallel:   cfg.NumParallel,
+		promptBuilder: buildChatPrompt,
 	}
 }
 
@@ -346,24 +360,100 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt, err := buildChatPrompt(req.Messages)
+	// Convert tools if present.
+	hasTools := len(req.Tools) > 0
+	var toolsList []tools.Tool
+	if hasTools {
+		for _, t := range req.Tools {
+			toolsList = append(toolsList, tools.Tool{
+				Type: t.Type,
+				Function: tools.ToolFunction{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					Parameters:  t.Function.Parameters,
+				},
+			})
+		}
+	}
+
+	// Convert messages for tool-role rewriting.
+	msgsForTools := make([]tools.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		msgsForTools[i] = tools.Message{
+			Role:     m.Role,
+			Content:  m.Content,
+			ToolName: m.ToolName,
+		}
+	}
+
+	// Build the effective message list:
+	// - If tools are present: inject tool preface into system message and
+	//   rewrite tool-role messages to user-role.
+	// - Otherwise: pass through as-is.
+	var effectiveMsgs []Message
+	if hasTools {
+		rewritten := tools.RewriteToolMessages(msgsForTools)
+		preface := tools.RenderToolPreface(toolsList)
+
+		// Find (or create) the system message and prepend the tool preface.
+		foundSystem := false
+		for _, m := range rewritten {
+			if m.Role == "system" && !foundSystem {
+				effectiveMsgs = append(effectiveMsgs, Message{
+					Role:    "system",
+					Content: preface + m.Content,
+				})
+				foundSystem = true
+			} else {
+				effectiveMsgs = append(effectiveMsgs, Message{Role: m.Role, Content: m.Content})
+			}
+		}
+		if !foundSystem {
+			// No system message present — inject one at the front.
+			newMsgs := make([]Message, 0, len(effectiveMsgs)+1)
+			newMsgs = append(newMsgs, Message{Role: "system", Content: preface})
+			newMsgs = append(newMsgs, effectiveMsgs...)
+			effectiveMsgs = newMsgs
+		}
+	} else {
+		effectiveMsgs = req.Messages
+	}
+
+	prompt, err := h.chatPrompt(effectiveMsgs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	stream := req.Stream == nil || *req.Stream
+	// When tools are present, buffer all tokens and deliver atomically
+	// (streaming is not supported for tool calls in v0.1).
+	if hasTools {
+		stream = false
+	}
+
 	name, tag := h.mgr.Resolve(req.Model)
 	modelKey := name + ":" + tag
 	opts := buildGenerateOptions(req.Options)
 
-	// Resolve grammar constraint from the format field.
-	grammarStr, err := resolveGrammar(req.Format)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if hasTools {
+		// Tool calling: use Grammar+GrammarLazy (lazy trigger).
+		grammarStr, lazyTrigger, gErr := tools.BuildGrammar(toolsList)
+		if gErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid tool schema: "+gErr.Error())
+			return
+		}
+		opts.Grammar = grammarStr
+		opts.GrammarLazy = []string{lazyTrigger}
+	} else {
+		// Structured output: use GrammarStr from format field (PR #37).
+		grammarStr, gErr := resolveGrammar(req.Format)
+		if gErr != nil {
+			writeError(w, http.StatusBadRequest, gErr.Error())
+			return
+		}
+		opts.GrammarStr = grammarStr
 	}
-	opts.GrammarStr = grammarStr
 
 	start := time.Now()
 	nw := NewNDJSONWriter(w)
@@ -404,11 +494,42 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	output := sb.String()
 	total := dur.Nanoseconds()
+
+	// Attempt to parse a tool call when tools were requested.
+	if hasTools {
+		if tc, ok := tools.ParseToolCall(output); ok {
+			toolCallMsg := Message{
+				Role: "assistant",
+				ToolCalls: []ToolCall{
+					{
+						Function: ToolCallFunction{
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					},
+				},
+			}
+			nw.Write(ChatResponse{ //nolint:errcheck
+				Model:         req.Model,
+				CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+				Message:       toolCallMsg,
+				Done:          true,
+				DoneReason:    "tool_calls",
+				TotalDuration: total,
+				EvalCount:     evalCount,
+				EvalDuration:  total,
+			})
+			return
+		}
+		// No tool call parsed — fall through and return as plain content.
+	}
+
 	nw.Write(ChatResponse{ //nolint:errcheck
 		Model:         req.Model,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
-		Message:       Message{Role: "assistant", Content: sb.String()},
+		Message:       Message{Role: "assistant", Content: output},
 		Done:          true,
 		TotalDuration: total,
 		EvalCount:     evalCount,
@@ -567,6 +688,14 @@ func buildGenerateOptions(opts *Options) engine.GenerateOptions {
 		goOpts.Sampler.Seed = opts.Seed
 	}
 	return goOpts
+}
+
+// chatPrompt applies the handler's prompt builder (defaults to buildChatPrompt).
+func (h *Handler) chatPrompt(msgs []Message) (string, error) {
+	if h.promptBuilder != nil {
+		return h.promptBuilder(msgs)
+	}
+	return buildChatPrompt(msgs)
 }
 
 // buildChatPrompt formats messages as a ChatML prompt string.
