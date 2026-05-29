@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/baby-whales-pod/beeket/internal/engine"
+	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 )
 
@@ -130,6 +131,7 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	}
 	blobPath := s.mgr.BlobPath(mf)
 
+	loadStart := time.Now()
 	m, err := s.eng.LoadModel(blobPath)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: load model: %w", err)
@@ -140,6 +142,8 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 		m.Free()
 		return nil, fmt.Errorf("scheduler: new session: %w", err)
 	}
+	loadDur := time.Since(loadStart)
+	metrics.ModelLoadDuration.WithLabelValues(key).Observe(loadDur.Seconds())
 
 	w := &Worker{
 		model:     m,
@@ -155,8 +159,9 @@ func (s *Scheduler) getOrLoadWorker(name, tag string) (*Worker, error) {
 	s.workers[key] = w
 	s.mu.Unlock()
 
+	metrics.ModelsLoaded.Set(float64(len(s.workers)))
 	go w.run()
-	slog.Info("scheduler: model loaded", "model", key)
+	slog.Info("scheduler: model loaded", "model", key, "load_dur", loadDur)
 	return w, nil
 }
 
@@ -174,6 +179,8 @@ func (s *Scheduler) evictLRU() bool {
 		return false
 	}
 	delete(s.workers, oldestKey)
+	metrics.ModelsLoaded.Set(float64(len(s.workers)))
+	metrics.ModelEvictionsTotal.WithLabelValues("lru").Inc()
 	go oldest.stop()
 	slog.Info("scheduler: evicted model", "model", oldestKey)
 	return true
@@ -189,6 +196,8 @@ func (s *Scheduler) evictionLoop() {
 		for key, w := range s.workers {
 			if now.Sub(w.lastUsed) > w.keepAlive {
 				delete(s.workers, key)
+				metrics.ModelsLoaded.Set(float64(len(s.workers)))
+				metrics.ModelEvictionsTotal.WithLabelValues("idle").Inc()
 				go w.stop()
 				slog.Info("scheduler: idle eviction", "model", key)
 			}

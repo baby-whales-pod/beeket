@@ -5,6 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/baby-whales-pod/beeket/internal/metrics"
 )
 
 // Server is the Beeket HTTP server.
@@ -27,6 +31,10 @@ func NewServer(h *Handler) *Server {
 func (s *Server) routes() {
 	h := s.handler
 
+	// Observability — registered before wrapping so /metrics bypasses middleware counting.
+	s.mux.Handle("GET /metrics", promhttp.Handler())
+	s.mux.HandleFunc("GET /api/status", h.Status)
+
 	// Model management.
 	s.mux.HandleFunc("POST /api/pull", h.Pull)
 	s.mux.HandleFunc("GET /api/tags", h.Tags)
@@ -46,12 +54,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", h.Readyz)
 }
 
-// ServeHTTP implements http.Handler with request logging middleware.
+// ServeHTTP implements http.Handler. The metrics middleware wraps the mux so
+// every request (except /metrics itself) is counted and timed.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
-	s.mux.ServeHTTP(rw, r)
-	slog.Info("http",
+	metrics.Middleware(s.mux).ServeHTTP(rw, r)
+	slog.Debug("http",
 		"method", r.Method,
 		"path", r.URL.Path,
 		"status", rw.status,

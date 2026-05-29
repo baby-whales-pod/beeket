@@ -50,6 +50,10 @@ type RuntimeConfig struct {
 	MaxLoaded   int    `toml:"max_loaded"`
 	KeepAlive   string `toml:"keep_alive"`
 	ContextSize int    `toml:"context_size"`
+
+	// Metrics configuration.
+	MetricsEnabled bool   `toml:"metrics_enabled"`
+	MetricsBind    string `toml:"metrics_bind"`
 }
 
 // DownloadConfig holds download manager settings.
@@ -77,12 +81,13 @@ func Defaults() Config {
 			LibDir:  "",
 		},
 		Runtime: RuntimeConfig{
-			Backend:     "auto",
-			GPULayers:   -1,
-			NumParallel: 1,
-			MaxLoaded:   3,
-			KeepAlive:   "5m",
-			ContextSize: 4096,
+			Backend:        "auto",
+			GPULayers:      -1,
+			NumParallel:    1,
+			MaxLoaded:      3,
+			KeepAlive:      "5m",
+			ContextSize:    4096,
+			MetricsEnabled: true,
 		},
 		Download: DownloadConfig{
 			Concurrency: 4,
@@ -188,6 +193,12 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("BEEKET_AUTO_INSTALL_LIB"); v != "" {
 		cfg.Runtime.AutoInstallLib = v == "true" || v == "1"
+	}
+	if v := os.Getenv("BEEKET_METRICS_ENABLED"); v != "" {
+		cfg.Runtime.MetricsEnabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("BEEKET_METRICS_BIND"); v != "" {
+		cfg.Runtime.MetricsBind = v
 	}
 
 	if v := os.Getenv("BEEKET_LOG_LEVEL"); v != "" {

@@ -14,12 +14,14 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
 	"github.com/baby-whales-pod/beeket/internal/api"
 	"github.com/baby-whales-pod/beeket/internal/config"
 	"github.com/baby-whales-pod/beeket/internal/engine"
 	"github.com/baby-whales-pod/beeket/internal/libinstall"
+	"github.com/baby-whales-pod/beeket/internal/metrics"
 	"github.com/baby-whales-pod/beeket/internal/models"
 	"github.com/baby-whales-pod/beeket/internal/scheduler"
 	"github.com/baby-whales-pod/beeket/internal/store"
@@ -146,6 +148,9 @@ type serveFlagValues struct {
 	libUpgrade        bool
 	libInstallTimeout time.Duration
 
+	metricsEnabled bool
+	metricsBind    string
+
 	logLevel  string
 	logFormat string
 }
@@ -189,6 +194,11 @@ Binds to 127.0.0.1:11435 by default and serves an Ollama-compatible REST API.`,
 	cmd.Flags().DurationVar(&fv.libInstallTimeout, "lib-install-timeout", 10*time.Minute,
 		"maximum time to wait for the library download; only used with --auto-install-lib")
 
+	cmd.Flags().BoolVar(&fv.metricsEnabled, "metrics-enabled", true,
+		"expose Prometheus metrics at /metrics")
+	cmd.Flags().StringVar(&fv.metricsBind, "metrics-bind", "",
+		"optional secondary address for /metrics (e.g. 0.0.0.0:11436); when set, /metrics is also served here")
+
 	cmd.Flags().StringVar(&fv.logLevel, "log-level", "info", "log level: debug|info|warn|error")
 	cmd.Flags().StringVar(&fv.logFormat, "log-format", "text", "log format: text|json")
 
@@ -213,6 +223,12 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 	slog.SetDefault(log)
 
 	slog.Info("starting beeket serve", "version", version.Version, "commit", version.Commit, "addr", cfg.Addr())
+
+	// Initialise Prometheus metrics.
+	startTime := time.Now()
+	metrics.Register()
+	metrics.SetBuildInfo(version.Version, version.Commit, version.BuildDate)
+	metrics.StartUptimeTicker(startTime)
 
 	// Signal handling set up early so CTRL+C works during library download.
 	quit := make(chan os.Signal, 1)
@@ -282,7 +298,12 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 		SamplerOpts: engine.DefaultSamplerOptions(),
 	})
 
-	handler := api.NewHandler(mgr, st, sched)
+	handler := api.NewHandlerWithConfig(mgr, st, sched, api.HandlerConfig{
+		StartTime:   startTime,
+		Backend:     cfg.Runtime.Backend,
+		MaxLoaded:   cfg.Runtime.MaxLoaded,
+		NumParallel: cfg.Runtime.NumParallel,
+	})
 	srv := api.NewServer(handler)
 	httpSrv := &http.Server{
 		Addr:         cfg.Addr(),
@@ -300,6 +321,29 @@ func runServe(cmd *cobra.Command, fv serveFlagValues) error {
 			rootCancel()
 		}
 	}()
+
+	// Optional secondary metrics listener (needed for Prometheus-in-Docker scenarios).
+	if cfg.Runtime.MetricsBind != "" {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", promhttp.Handler())
+		metricsSrv := &http.Server{
+			Addr:        cfg.Runtime.MetricsBind,
+			Handler:     metricsMux,
+			ReadTimeout: 10 * time.Second,
+			IdleTimeout: 60 * time.Second,
+		}
+		go func() {
+			slog.Info("beeket metrics: listening", "addr", cfg.Runtime.MetricsBind)
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Warn("beeket metrics: listener error", "err", err)
+			}
+		}()
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = metricsSrv.Shutdown(ctx) //nolint:errcheck
+		}()
+	}
 
 	<-rootCtx.Done()
 
@@ -360,6 +404,12 @@ func applyServeFlags(cfg *config.Config, cmd *cobra.Command, fv serveFlagValues)
 	}
 	if cmd.Flags().Changed("lib-upgrade") {
 		cfg.Runtime.LibUpgrade = fv.libUpgrade
+	}
+	if cmd.Flags().Changed("metrics-enabled") {
+		cfg.Runtime.MetricsEnabled = fv.metricsEnabled
+	}
+	if cmd.Flags().Changed("metrics-bind") {
+		cfg.Runtime.MetricsBind = fv.metricsBind
 	}
 	if cmd.Flags().Changed("log-level") {
 		cfg.Log.Level = fv.logLevel
