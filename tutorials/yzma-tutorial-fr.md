@@ -51,7 +51,7 @@ Caractéristiques principales :
 
 | Requis | Notes |
 |---|---|
-| Go 1.22+ | Testé avec 1.22 et versions ultérieures. |
+| Go 1.25+ | yzma v1.13.0 nécessite Go 1.25.0 ou une version ultérieure. |
 | CLI `yzma` | Utilisé pour installer les bibliothèques llama.cpp et télécharger des modèles. |
 | Bibliothèques partagées llama.cpp | Installées via `yzma install`. |
 
@@ -219,7 +219,8 @@ model, err := llama.ModelLoadFromFile(modelPath, modelParams)
 if err != nil {
     log.Fatalf("ModelLoadFromFile : %v", err)
 }
-defer llama.ModelFree(model)
+// À l'intérieur d'une fonction — defer s'exécute au retour de la fonction
+defer func() { _ = llama.ModelFree(model) }()
 ```
 
 `ModelLoadFromFile` retourne un handle opaque `llama.Model` (un `uintptr` en interne).
@@ -241,7 +242,7 @@ ctx, err := llama.InitFromModel(model, ctxParams)
 if err != nil {
     log.Fatalf("InitFromModel : %v", err)
 }
-defer llama.Free(ctx)
+defer func() { _ = llama.Free(ctx) }()
 ```
 
 Champs clés de `ContextParams` :
@@ -422,10 +423,10 @@ fmt.Print(string(piece[:n]))
 Libérez toujours les ressources dans l'ordre inverse de leur création :
 
 ```go
-llama.SamplerFree(sampler)  // libère la chaîne + tous les samplers qu'elle contient
-llama.Free(ctx)             // libère le contexte d'inférence et le cache KV
-llama.ModelFree(model)      // décharge les poids du modèle
-llama.Close()               // arrête les backends GGML
+llama.SamplerFree(sampler)              // libère la chaîne + tous les samplers qu'elle contient
+_ = llama.Free(ctx)                    // libère le contexte d'inférence et le cache KV
+_ = llama.ModelFree(model)             // décharge les poids du modèle
+llama.Close()                          // arrête les backends GGML
 ```
 
 Utiliser `defer` au moment de la création est l'approche idiomatique en Go (comme
@@ -484,7 +485,7 @@ func main() {
     if err != nil {
         log.Fatalf("ModelLoadFromFile : %v", err)
     }
-    defer llama.ModelFree(model)
+    defer func() { _ = llama.ModelFree(model) }()
 
     // ---- 5. Créer le contexte d'inférence ----
     ctxParams := llama.ContextDefaultParams()
@@ -492,7 +493,7 @@ func main() {
     if err != nil {
         log.Fatalf("InitFromModel : %v", err)
     }
-    defer llama.Free(ctx)
+    defer func() { _ = llama.Free(ctx) }()
 
     // ---- 6. Construire le prompt de chat ----
     vocab := llama.ModelGetVocab(model)

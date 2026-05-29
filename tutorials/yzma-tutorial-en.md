@@ -51,7 +51,7 @@ Key properties:
 
 | Requirement | Notes |
 |---|---|
-| Go 1.22+ | Tested with 1.22 and later. |
+| Go 1.25+ | yzma v1.13.0 requires Go 1.25.0 or later. |
 | `yzma` CLI | Used to install llama.cpp libraries and download models. |
 | llama.cpp shared libraries | Installed via `yzma install`. |
 
@@ -216,7 +216,8 @@ model, err := llama.ModelLoadFromFile(modelPath, modelParams)
 if err != nil {
     log.Fatalf("ModelLoadFromFile: %v", err)
 }
-defer llama.ModelFree(model)
+// Inside a function — defer runs when the function returns
+defer func() { _ = llama.ModelFree(model) }()
 ```
 
 `ModelLoadFromFile` returns an opaque `llama.Model` handle (a `uintptr` under the
@@ -238,7 +239,7 @@ ctx, err := llama.InitFromModel(model, ctxParams)
 if err != nil {
     log.Fatalf("InitFromModel: %v", err)
 }
-defer llama.Free(ctx)
+defer func() { _ = llama.Free(ctx) }()
 ```
 
 Key `ContextParams` fields:
@@ -418,10 +419,10 @@ fmt.Print(string(piece[:n]))
 Always free resources in reverse order of creation:
 
 ```go
-llama.SamplerFree(sampler)  // frees the chain + all samplers in it
-llama.Free(ctx)             // frees the inference context and KV-cache
-llama.ModelFree(model)      // unloads the model weights
-llama.Close()               // shuts down GGML backends
+llama.SamplerFree(sampler)              // frees the chain + all samplers in it
+_ = llama.Free(ctx)                    // frees the inference context and KV-cache
+_ = llama.ModelFree(model)             // unloads the model weights
+llama.Close()                          // shuts down GGML backends
 ```
 
 Using `defer` at creation time is the idiomatic Go approach (as shown in the full
@@ -480,7 +481,7 @@ func main() {
     if err != nil {
         log.Fatalf("ModelLoadFromFile: %v", err)
     }
-    defer llama.ModelFree(model)
+    defer func() { _ = llama.ModelFree(model) }()
 
     // ---- 5. Create inference context ----
     ctxParams := llama.ContextDefaultParams()
@@ -488,7 +489,7 @@ func main() {
     if err != nil {
         log.Fatalf("InitFromModel: %v", err)
     }
-    defer llama.Free(ctx)
+    defer func() { _ = llama.Free(ctx) }()
 
     // ---- 6. Build the chat prompt ----
     vocab := llama.ModelGetVocab(model)
