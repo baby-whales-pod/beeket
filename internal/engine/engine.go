@@ -134,10 +134,18 @@ func (e *Engine) NewSession(model *Model, contextSize uint32, opts SamplerOption
 }
 
 // buildSampler constructs a sampler chain from options.
-// If grammarStr is non-empty, a grammar sampler is prepended to the chain.
+// If grammarStr is non-empty, a grammar sampler is added AFTER the temperature
+// samplers but BEFORE the distribution sampler — the canonical llama.cpp order:
+//
+//	TopK → TopP → MinP → TempExt → [Grammar] → Dist
+//
 // Returns an error if the grammar string is set but llama.cpp rejects it.
 func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) (llama.Sampler, error) {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
+	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
+	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
+	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
+	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
 	if grammarStr != "" {
 		grammarSampler := llama.SamplerInitGrammar(vocab, grammarStr, "root")
 		if grammarSampler == 0 {
@@ -146,10 +154,6 @@ func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) (ll
 		}
 		llama.SamplerChainAdd(chain, grammarSampler)
 	}
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
-	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
 	llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
 	return chain, nil
 }
@@ -227,6 +231,18 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 			llama.SamplerFree(requestSampler)
 		}
 	}()
+
+	// Prefill the grammar sampler with prompt tokens so the grammar state
+	// machine is correctly positioned before generation begins.
+	// Non-lazy (eager) grammar samplers must "see" every token that the model
+	// has already processed so the internal GBNF stack is not empty when the
+	// first generated token arrives.
+	// This matches llama.cpp common/sampling.cpp lines 282-290.
+	if requestSampler != 0 && opts.GrammarStr != "" {
+		for _, tok := range tokens {
+			llama.SamplerAccept(requestSampler, tok)
+		}
+	}
 
 	var buf [256]byte
 	var generated strings.Builder
