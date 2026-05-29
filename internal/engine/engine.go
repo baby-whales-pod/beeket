@@ -232,17 +232,11 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 		}
 	}()
 
-	// Prefill the grammar sampler with prompt tokens so the grammar state
-	// machine is correctly positioned before generation begins.
-	// Non-lazy (eager) grammar samplers must "see" every token that the model
-	// has already processed so the internal GBNF stack is not empty when the
-	// first generated token arrives.
-	// This matches llama.cpp common/sampling.cpp lines 282-290.
-	if requestSampler != 0 && opts.GrammarStr != "" {
-		for _, tok := range tokens {
-			llama.SamplerAccept(requestSampler, tok)
-		}
-	}
+	// Note: eager-grammar prefilling (feeding prompt tokens to SamplerAccept
+	// before the generation loop) was removed. Structured output now uses lazy
+	// grammars (Grammar + GrammarLazy) that activate only when the trigger
+	// pattern "{" is sampled, so no prefill is needed. The GrammarStr path is
+	// retained for future use but is not exercised by any current handler.
 
 	var buf [256]byte
 	var generated strings.Builder

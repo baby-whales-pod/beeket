@@ -287,12 +287,19 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	opts := buildGenerateOptions(req.Options)
 
 	// Resolve grammar constraint from the format field.
+	// Use lazy grammar (trigger on "{") so the grammar sampler only activates
+	// when the model begins generating the JSON object. This avoids the need
+	// to prefill the sampler with prompt tokens, which would require
+	// parseSpecial=true in Tokenize to match the KV-cache token sequence.
 	grammarStr, err := resolveGrammar(req.Format)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	opts.GrammarStr = grammarStr
+	if grammarStr != "" {
+		opts.Grammar = grammarStr
+		opts.GrammarLazy = []string{"{"}
+	}
 
 	prompt := req.Prompt
 	if req.System != "" {
@@ -446,13 +453,19 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		opts.Grammar = grammarStr
 		opts.GrammarLazy = []string{lazyTrigger}
 	} else {
-		// Structured output: use GrammarStr from format field (PR #37).
+		// Structured output: use lazy grammar (trigger on "{") so the grammar
+		// sampler only activates when the model starts generating JSON.
+		// This avoids the prompt-token prefill problem where Tokenize with
+		// parseSpecial=false produces different token IDs than the KV cache.
 		grammarStr, gErr := resolveGrammar(req.Format)
 		if gErr != nil {
 			writeError(w, http.StatusBadRequest, gErr.Error())
 			return
 		}
-		opts.GrammarStr = grammarStr
+		if grammarStr != "" {
+			opts.Grammar = grammarStr
+			opts.GrammarLazy = []string{"{"}
+		}
 	}
 
 	start := time.Now()
