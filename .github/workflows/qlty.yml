@@ -16,8 +16,107 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - uses: qltysh/qlty-action/install@a19242102d17e497f437d7466aa01b528537e899  # v2.2.0
-      - run: qlty check --all
+
+      - name: Run qlty and capture JSON report
+        id: qlty_run
+        run: |
+          set +e
+          qlty check --all --json > qlty-report.json
+          echo "QLTY_EXIT_CODE=$?" >> $GITHUB_ENV
+          set -e
+
+      - name: Write step summary
+        if: always()
+        run: python3 .github/scripts/qlty-summary.py
+
+      - name: Upload qlty report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: qlty-report
+          path: qlty-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const MARKER = '<!-- qlty-report -->';
+            let body = `${MARKER}\n## qlty Quality Report\n\n`;
+            let report = {};
+            let parseError = false;
+            try {
+              report = JSON.parse(fs.readFileSync('qlty-report.json', 'utf8'));
+            } catch (e) {
+              body += `⚠️ Could not parse qlty report: ${e.message}\n`;
+              parseError = true;
+            }
+            if (!parseError) {
+              const issues = Array.isArray(report) ? report : (report.issues || report.results || []);
+              if (issues.length === 0) {
+                body += '✅ No issues found.';
+              } else {
+                const total = issues.length;
+                const severityCounts = {};
+                const filesMap = {};
+                for (const issue of issues) {
+                  const sev = (issue.level || issue.severity || 'unknown')
+                    .toLowerCase()
+                    .replace(/^level_/, '');
+                  severityCounts[sev] = (severityCounts[sev] || 0) + 1;
+                  const loc = issue.location || {};
+                  const path = loc.path || issue.path || issue.file || 'unknown';
+                  filesMap[path] = (filesMap[path] || 0) + 1;
+                }
+                body += `**${total} issue${total !== 1 ? 's' : ''} found**\n\n`;
+                body += '### Severity breakdown\n\n';
+                body += '| Severity | Count |\n|----------|-------|\n';
+                const icons = { high: '🔴', medium: '🟡', low: '🔵' };
+                const order = ['high', 'medium', 'low'];
+                const allSevs = [...new Set([...order, ...Object.keys(severityCounts)])];
+                for (const sev of allSevs) {
+                  if (severityCounts[sev] !== undefined) {
+                    const icon = icons[sev] || '⚪';
+                    body += `| ${icon} ${sev.charAt(0).toUpperCase() + sev.slice(1)} | ${severityCounts[sev]} |\n`;
+                  }
+                }
+                body += '\n### Files with issues\n\n';
+                for (const [file, count] of Object.entries(filesMap).sort()) {
+                  body += `- \`${file}\` — ${count} issue${count !== 1 ? 's' : ''}\n`;
+                }
+              }
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Enforce qlty exit code
+        if: always()
+        run: exit ${{ env.QLTY_EXIT_CODE }}
