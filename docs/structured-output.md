@@ -15,7 +15,7 @@ The `format` field is accepted on both `/api/chat` and `/api/generate`.
 Pass `"format": "json"` to constrain output to any valid JSON value.
 
 ```bash
-curl -s http://localhost:11435/api/chat \
+curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -32,7 +32,7 @@ curl -s http://localhost:11435/api/chat \
 Pass a JSON Schema object as `"format"` to constrain the output to matching that schema.
 
 ```bash
-curl -s http://localhost:11435/api/chat \
+curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -66,7 +66,7 @@ curl -s http://localhost:11435/api/chat \
 Structured output works with streaming too. Each chunk is a partial token; the final assembled content is valid JSON.
 
 ```bash
-curl -s http://localhost:11435/api/chat \
+curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",
@@ -90,7 +90,7 @@ curl -s http://localhost:11435/api/chat \
 The `format` field also works on the generate endpoint:
 
 ```bash
-curl -s http://localhost:11435/api/generate \
+curl -s http://${BEEKET_HOST:-127.0.0.1}:${BEEKET_PORT:-11435}/api/generate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smollm2:135m",

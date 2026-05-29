@@ -46,7 +46,7 @@ while IFS= read -r line; do
   echo "$line" | jq -c '.' 2>/dev/null || echo "$line"
   PIECE=$(echo "$line" | jq -r '.message.content // empty' 2>/dev/null || true)
   FULL_CONTENT="${FULL_CONTENT}${PIECE}"
-done < <(curl -sS -X POST "http://${BEEKET_HOST}:${BEEKET_PORT}/api/chat" \
+done < <(curl -sS --no-buffer -X POST "http://${BEEKET_HOST}:${BEEKET_PORT}/api/chat" \
   -H "Content-Type: application/json" \
   -d "$BODY")
 

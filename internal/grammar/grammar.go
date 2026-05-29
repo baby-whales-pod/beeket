@@ -48,8 +48,7 @@ func FromJSONSchema(schemaBytes []byte) (string, error) {
 // FromMap converts a JSON Schema represented as a Go map to a GBNF grammar string.
 func FromMap(schema map[string]any) (string, error) {
 	c := &converter{
-		rules:   make(map[string]string),
-		counter: make(map[string]int),
+		rules: make(map[string]string),
 	}
 	rootRule, err := c.visit(schema, "root")
 	if err != nil {
@@ -64,21 +63,30 @@ func FromMap(schema map[string]any) (string, error) {
 
 // converter accumulates GBNF rules during schema traversal.
 type converter struct {
-	rules   map[string]string // ruleName → body
-	order   []string          // insertion order for deterministic output
-	counter map[string]int    // for unique name generation
+	rules map[string]string // ruleName → body
+	order []string          // insertion order for deterministic output
 }
 
 // addRule records a rule. If the same name and body already exist it is reused.
-// Returns the rule name.
+// Returns the (possibly renamed) rule name.
 func (c *converter) addRule(name, body string) string {
 	if existing, ok := c.rules[name]; ok {
 		if existing == body {
 			return name
 		}
-		// Name collision with different body — generate a unique name.
-		c.counter[name]++
-		name = fmt.Sprintf("%s-%d", name, c.counter[name])
+		// Name collision with different body — find an unused numbered variant.
+		for i := 1; ; i++ {
+			candidate := fmt.Sprintf("%s-%d", name, i)
+			if existing2, ok2 := c.rules[candidate]; !ok2 {
+				// Slot is free — use it.
+				c.rules[candidate] = body
+				c.order = append(c.order, candidate)
+				return candidate
+			} else if existing2 == body {
+				// Same body already registered under this name — reuse.
+				return candidate
+			}
+		}
 	}
 	c.rules[name] = body
 	c.order = append(c.order, name)
@@ -153,7 +161,7 @@ func (c *converter) visit(schema map[string]any, preferredName string) (string, 
 	case "boolean":
 		return "boolean", nil
 	case "null":
-		return `"null"`, nil
+		return "null", nil
 	default:
 		// No type — treat as any JSON value
 		return "value", nil
@@ -170,16 +178,16 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		}
 	}
 
-	// Sort properties for deterministic output.
+	// Sort properties for deterministic output: required first, then optional,
+	// each group sorted alphabetically.
 	keys := make([]string, 0, len(props))
 	for k := range props {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// Separate required and optional properties.
-	reqKeys := make([]string, 0)
-	optKeys := make([]string, 0)
+	reqKeys := make([]string, 0, len(keys))
+	optKeys := make([]string, 0, len(keys))
 	for _, k := range keys {
 		if requiredSet[k] {
 			reqKeys = append(reqKeys, k)
@@ -189,9 +197,10 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 	}
 
 	var parts []string
-	allKeys := append(reqKeys, optKeys...)
 
-	for i, k := range allKeys {
+	// Emit required properties. The very first required property has no
+	// leading comma; all subsequent required properties do.
+	for i, k := range reqKeys {
 		propSchema, ok := props[k].(map[string]any)
 		if !ok {
 			propSchema = map[string]any{}
@@ -201,23 +210,46 @@ func (c *converter) visitObject(schema map[string]any, name string) (string, err
 		if err != nil {
 			return "", err
 		}
-
-		// If expr is complex (contains spaces) promote it to its own rule.
 		if isComplex(expr) && !isPrimitive(expr) {
-			ruleName := c.addRule(childName, expr)
-			expr = ruleName
+			expr = c.addRule(childName, expr)
 		}
+		keyLit, _ := json.Marshal(k)
+		pair := fmt.Sprintf("%s \":\" ws %s", string(keyLit), expr)
+		if i == 0 {
+			parts = append(parts, pair)
+		} else {
+			parts = append(parts, `"," ws `+pair)
+		}
+	}
 
+	// Emit optional properties. Each is wrapped in ( ... )? so it may be
+	// absent. When required properties precede them they also need a comma
+	// inside the optional group; when no required property precedes them the
+	// first optional prop has no comma and subsequent ones do.
+	for i, k := range optKeys {
+		propSchema, ok := props[k].(map[string]any)
+		if !ok {
+			propSchema = map[string]any{}
+		}
+		childName := sanitizeName(name + "-" + k)
+		expr, err := c.visit(propSchema, childName)
+		if err != nil {
+			return "", err
+		}
+		if isComplex(expr) && !isPrimitive(expr) {
+			expr = c.addRule(childName, expr)
+		}
 		keyLit, _ := json.Marshal(k)
 		pair := fmt.Sprintf("%s \":\" ws %s", string(keyLit), expr)
 
-		if i == 0 {
-			parts = append(parts, pair)
-		} else if requiredSet[k] {
-			parts = append(parts, `"," ws `+pair)
-		} else {
-			// Optional property: wrapped in ( "," ws pair )?
+		// A comma is needed when this optional prop is not the very first
+		// element overall (either required props exist, or a previous
+		// optional prop exists).
+		needComma := len(reqKeys) > 0 || i > 0
+		if needComma {
 			parts = append(parts, `( "," ws `+pair+` )?`)
+		} else {
+			parts = append(parts, `( `+pair+` )?`)
 		}
 	}
 

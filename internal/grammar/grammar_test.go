@@ -76,7 +76,8 @@ func TestFromMap_NullType(t *testing.T) {
 	schema := map[string]any{"type": "null"}
 	g, err := grammar.FromMap(schema)
 	require.NoError(t, err)
-	assert.Contains(t, g, `"null"`)
+	// The null type maps to the named "null" rule (consistent with other primitives).
+	assert.Contains(t, g, "root ::= null")
 }
 
 func TestFromMap_NoType(t *testing.T) {
@@ -252,7 +253,80 @@ func TestFromMap_ValidGBNFSyntax(t *testing.T) {
 	}
 }
 
-// ---- resolveGrammar-like behaviour tested via handler helper indirectly ----
+// TestFromMap_ObjectAllOptional is the regression test for B1:
+// when no properties are in "required", ALL properties must be wrapped
+// as optional ( ... )? — the first alphabetical property must not be
+// silently forced to be required.
+func TestFromMap_ObjectAllOptional(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"a": map[string]any{"type": "string"},
+			"b": map[string]any{"type": "string"},
+		},
+		// no "required" field
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// Extract just the root rule line for inspection.
+	var rootLine string
+	for _, line := range strings.Split(g, "\n") {
+		if strings.HasPrefix(line, "root ::=") {
+			rootLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, rootLine, "root rule must be present")
+
+	// Both "a" and "b" must appear inside ( ... )? groups.
+	// A simple proxy: both property keys appear and the rule contains "?".
+	assert.Contains(t, rootLine, `"a"`, "property a must appear in root rule")
+	assert.Contains(t, rootLine, `"b"`, "property b must appear in root rule")
+	assert.Contains(t, rootLine, "?", "all-optional object must contain optional markers")
+
+	// Neither property should appear *without* the optional wrapper,
+	// i.e., there must not be a bare `"a" ":"` before the opening `(`.
+	// We verify by checking the root rule body directly.
+	assert.NotContains(t, rootLine, `"{" ws "a"`,
+		`property "a" must not appear as a bare required first field`)
+	assert.NotContains(t, rootLine, `"{" ws "b"`,
+		`property "b" must not appear as a bare required first field`)
+}
+
+// TestFromMap_ObjectFirstPropOptional checks that when the first alphabetical
+// property is NOT in required but a later one is, the optional one is still
+// wrapped correctly.
+func TestFromMap_ObjectFirstPropOptional(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"aaa": map[string]any{"type": "string"}, // alphabetically first, NOT required
+			"zzz": map[string]any{"type": "string"}, // alphabetically last, required
+		},
+		"required": []any{"zzz"},
+	}
+	g, err := grammar.FromMap(schema)
+	require.NoError(t, err)
+
+	// The root rule should start with the required property (zzz)
+	// directly after the opening brace, and aaa should be optional.
+	var rootLine string
+	for _, line := range strings.Split(g, "\n") {
+		if strings.HasPrefix(line, "root ::=") {
+			rootLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, rootLine)
+	assert.Contains(t, rootLine, `"zzz"`, "required zzz must appear")
+	assert.Contains(t, rootLine, `"aaa"`, "optional aaa must appear")
+	// aaa must be in an optional group
+	assert.Contains(t, rootLine, "?", "optional property must be wrapped")
+	// zzz (required) should appear before aaa (optional) in the rule
+	assert.Less(t, strings.Index(rootLine, `"zzz"`), strings.Index(rootLine, `"aaa"`),
+		"required properties emitted before optional ones")
+}
 
 func TestJSONSchemaGrammar_Constant(t *testing.T) {
 	// Smoke-test: the constant must contain the root rule and helpers.

@@ -124,26 +124,33 @@ func (e *Engine) NewSession(model *Model, contextSize uint32, opts SamplerOption
 	if err != nil {
 		return nil, fmt.Errorf("engine: init context: %w", err)
 	}
-	sampler := buildSampler(opts, model.vocab, "")
+	sampler, err := buildSampler(opts, model.vocab, "")
+	if err != nil {
+		llama.Free(ctx) //nolint:errcheck
+		return nil, err
+	}
 	return &Session{model: model, ctx: ctx, sampler: sampler}, nil
 }
 
 // buildSampler constructs a sampler chain from options.
 // If grammarStr is non-empty, a grammar sampler is prepended to the chain.
-func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) llama.Sampler {
+// Returns an error if the grammar string is set but llama.cpp rejects it.
+func buildSampler(opts SamplerOptions, vocab llama.Vocab, grammarStr string) (llama.Sampler, error) {
 	chain := llama.SamplerChainInit(llama.SamplerChainDefaultParams())
 	if grammarStr != "" {
 		grammarSampler := llama.SamplerInitGrammar(vocab, grammarStr, "root")
-		if grammarSampler != 0 {
-			llama.SamplerChainAdd(chain, grammarSampler)
+		if grammarSampler == 0 {
+			llama.SamplerFree(chain)
+			return 0, fmt.Errorf("engine: failed to initialise grammar sampler (invalid grammar string?)")
 		}
+		llama.SamplerChainAdd(chain, grammarSampler)
 	}
 	llama.SamplerChainAdd(chain, llama.SamplerInitTopK(opts.TopK))
 	llama.SamplerChainAdd(chain, llama.SamplerInitTopP(opts.TopP, 1))
 	llama.SamplerChainAdd(chain, llama.SamplerInitMinP(opts.MinP, 1))
 	llama.SamplerChainAdd(chain, llama.SamplerInitTempExt(opts.Temperature, 1.0, 1.0))
 	llama.SamplerChainAdd(chain, llama.SamplerInitDist(opts.Seed))
-	return chain
+	return chain, nil
 }
 
 // Free releases the session's FFI resources.
@@ -182,7 +189,11 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	// This avoids mutating the shared session sampler.
 	sampler := s.sampler
 	if opts.GrammarStr != "" {
-		sampler = buildSampler(opts.Sampler, s.model.vocab, opts.GrammarStr)
+		var err error
+		sampler, err = buildSampler(opts.Sampler, s.model.vocab, opts.GrammarStr)
+		if err != nil {
+			return err
+		}
 		defer llama.SamplerFree(sampler)
 	}
 
