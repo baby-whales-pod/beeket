@@ -134,21 +134,19 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() //nolint:errcheck // error-path close; status checked below
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("delete: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
-
-// Generate streams generated text pieces for a prompt.
 func (c *Client) Generate(ctx context.Context, model, prompt string, out func(piece string)) error {
 	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "stream": true})
 	resp, err := c.post(ctx, "/api/generate", body)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -184,7 +182,7 @@ func (c *Client) PS(ctx context.Context) ([]PSModel, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
 	var r struct {
 		Models []PSModel `json:"models"`
 	}
@@ -200,7 +198,7 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
 	var r struct {
 		Version string `json:"version"`
 	}
@@ -223,7 +221,7 @@ func (c *Client) post(ctx context.Context, path string, body []byte) (*http.Resp
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		resp.Body.Close()
+		_ = resp.Body.Close() //nolint:errcheck
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
 	}
 	return resp, nil
@@ -239,7 +237,7 @@ func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		resp.Body.Close()
+		_ = resp.Body.Close() //nolint:errcheck
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
 	}
 	return resp, nil

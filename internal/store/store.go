@@ -78,7 +78,9 @@ func (s *Store) ReadManifest(name, tag string, v any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close() //nolint:errcheck // read-only file; close error is not actionable
+	}()
 	return json.NewDecoder(f).Decode(v)
 }
 
