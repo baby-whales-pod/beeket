@@ -606,6 +606,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	output := sb.String()
+	// Strip any trailing stop string from the output. Stop strings halt the
+	// generation loop but are included in the accumulated output; they must not
+	// appear in the response content (e.g. <|im_end|> leaking into tool results).
+	for _, stop := range opts.StopStrings {
+		if strings.HasSuffix(output, stop) {
+			output = strings.TrimSpace(strings.TrimSuffix(output, stop))
+			break
+		}
+	}
 	total := dur.Nanoseconds()
 
 	// Validate response against JSON schema if one was provided (non-tool-call path).
