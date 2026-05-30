@@ -17,7 +17,7 @@ type Details struct {
 	QuantizationLevel string `json:"quantization_level"`
 	ContextLength     int    `json:"context_length"`
 	// EmbeddingLength is non-zero only for embedding models.
-	EmbeddingLength int  `json:"embedding_length,omitempty"`
+	EmbeddingLength int    `json:"embedding_length,omitempty"`
 	Format          string `json:"format"`
 	// HasVision is true when a vision projector (mmproj) is present.
 	HasVision bool `json:"has_vision,omitempty"`
