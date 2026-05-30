@@ -8,3 +8,5 @@
 - [Embeddings](./embeddings.md)
 - [Tool Calling](./tools.md)
 - [Monitoring](./monitoring.md)
+- [Contributing Guide](./contributing.md)
+- [Code Map](./code-map.md)
