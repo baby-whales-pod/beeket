@@ -144,6 +144,7 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	}
 	return nil
 }
+
 // Generate streams generated text for a prompt, calling out for each piece.
 func (c *Client) Generate(ctx context.Context, model, prompt string, out func(piece string)) error {
 	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "stream": true})
