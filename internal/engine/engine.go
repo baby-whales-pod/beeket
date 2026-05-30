@@ -484,17 +484,18 @@ func (s *EmbedSession) Embed(ctx context.Context, text string) ([]float32, int, 
 	}
 
 	var raw []float32
-	if s.pooling != llama.PoolingTypeNone {
-		// Pooled: one vector per sequence (seq_id 0 from BatchGetOne).
-		v, err := llama.GetEmbeddingsSeq(s.ctx, 0, s.nEmbd)
-		if err == nil {
-			raw = v
-		}
+	// For decoder-style embedding models (ModelHasEncoder=false, PoolingTypeNone),
+	// embeddings are stored per-token; use GetEmbeddingsIth(lastToken).
+	// GetEmbeddingsSeq is tried first for true pooled encoder models but is known
+	// to return nil for nomic-embed-text even when the context reports PoolingTypeMean.
+	// Diagnostic: GetPoolingType may return Mean (1) even when initialized with None;
+	// always attempt GetEmbeddingsIth as the primary path, fall back to GetEmbeddingsSeq.
+	if v, err := llama.GetEmbeddingsIth(s.ctx, int32(len(tokens))-1, s.nEmbd); err == nil && len(v) > 0 {
+		raw = v
 	}
 	if raw == nil {
-		// Fallback: take the last token's embedding (Ollama default).
-		v, err := llama.GetEmbeddingsIth(s.ctx, int32(len(tokens))-1, s.nEmbd)
-		if err == nil {
+		// Pooled fallback: one vector per sequence (seq_id 0).
+		if v, err := llama.GetEmbeddingsSeq(s.ctx, 0, s.nEmbd); err == nil && len(v) > 0 {
 			raw = v
 		}
 	}
