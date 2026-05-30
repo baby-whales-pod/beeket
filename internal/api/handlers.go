@@ -481,10 +481,31 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, chatGrammarStr != "")
 	}
 
-	prompt, err := h.chatPrompt(effectiveMsgs)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	// Build the message list for the engine's native chat template.
+	// When engMsgs is set, the engine calls s.ApplyChatTemplate() using the
+	// model's own GGUF template (e.g. "qwen3") which correctly handles
+	// thinking-model control variables like enable_thinking.
+	// For tool-calling requests, we still build the prompt string via chatPrompt
+	// because tool prompts go through a different code path (Grammar + GrammarLazy)
+	// that relies on the pre-built prompt string.
+	engMsgs := make([]engine.ChatMessage, len(effectiveMsgs))
+	for i, m := range effectiveMsgs {
+		engMsgs[i] = engine.ChatMessage{Role: m.Role, Content: m.Content}
+	}
+
+	// Only call chatPrompt for tool-calling requests (where the pre-built prompt
+	// string is still needed) or when engMsgs is empty (fallback).
+	// For plain chat and structured output, the engine builds the prompt from
+	// opts.Messages via s.ApplyChatTemplate — calling chatPrompt here would be
+	// dead work since that result is discarded.
+	var prompt string
+	if hasTools || len(engMsgs) == 0 {
+		var pErr error
+		prompt, pErr = h.chatPrompt(effectiveMsgs)
+		if pErr != nil {
+			writeError(w, http.StatusBadRequest, pErr.Error())
+			return
+		}
 	}
 
 	stream := req.Stream == nil || *req.Stream
@@ -499,14 +520,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	opts := buildGenerateOptions(req.Options)
 	// Merge any stop strings injected by injectNoThink (e.g. "</think>").
 	opts.StopStrings = append(opts.StopStrings, chatOpts.StopStrings...)
-
-	// Pass effectiveMsgs to the engine so it can apply the model's native chat
-	// template (which correctly handles thinking-model control variables).
-	// This is more reliable than the hardcoded 'chatml' template in buildChatPrompt.
-	engMsgs := make([]engine.ChatMessage, len(effectiveMsgs))
-	for i, m := range effectiveMsgs {
-		engMsgs[i] = engine.ChatMessage{Role: m.Role, Content: m.Content}
-	}
 	opts.Messages = engMsgs
 
 	if hasTools {
