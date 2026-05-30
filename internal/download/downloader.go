@@ -19,7 +19,7 @@ import (
 // Progress is called periodically during a download.
 type Progress func(downloaded, total int64)
 
-// Resolver translates a model reference string into a direct download URL.
+// Resolve translates a model reference string into a direct download URL.
 func Resolve(ref string) (string, error) {
 	// Direct HTTPS URL.
 	if strings.HasPrefix(ref, "https://") || strings.HasPrefix(ref, "http://") {

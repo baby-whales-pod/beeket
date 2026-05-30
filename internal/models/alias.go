@@ -1,7 +1,10 @@
-// Package models — alias table with built-in Beeket model shortcuts.
+// Package models manages the Beeket model registry: manifests, aliases,
+// metadata, and model-reference normalisation.
 package models
 
 // AliasEntry maps a short name to a (name, tag, source) tuple.
+// Source is the canonical Hugging Face download URL; MMProjURL is the
+// optional vision projector URL for multimodal models.
 type AliasEntry struct {
 	Name      string
 	Tag       string

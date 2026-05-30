@@ -1,4 +1,3 @@
-// Package api — request handlers.
 package api
 
 import (
@@ -61,10 +60,15 @@ type Handler struct {
 }
 
 // HandlerConfig carries optional configuration for NewHandler.
+// Zero values are replaced with sensible defaults in NewHandlerWithConfig.
 type HandlerConfig struct {
-	StartTime   time.Time
-	Backend     string
-	MaxLoaded   int
+	// StartTime is the server start time used to compute uptime.
+	StartTime time.Time
+	// Backend is the detected processor backend (e.g. "cpu", "metal", "cuda").
+	Backend string
+	// MaxLoaded is the maximum number of simultaneously loaded models.
+	MaxLoaded int
+	// NumParallel is the maximum number of parallel inference slots per model.
 	NumParallel int
 }
 

@@ -96,7 +96,8 @@ type Session struct {
 	pos     int32 // current position in the context
 }
 
-// SamplerOptions configures the token sampler.
+// SamplerOptions configures the token sampler for a Session or per-request override.
+// Zero values use the defaults returned by DefaultSamplerOptions.
 type SamplerOptions struct {
 	Temperature float32
 	TopK        int32
@@ -236,6 +237,7 @@ func (s *Session) Free() {
 // -------------------------------------------------------------------
 
 // GenerateOptions controls a single generation call.
+// Grammar and GrammarStr are mutually exclusive; Grammar takes precedence.
 type GenerateOptions struct {
 	MaxTokens   int
 	StopStrings []string
@@ -257,7 +259,8 @@ type GenerateOptions struct {
 	Messages []ChatMessage
 }
 
-// ChatMessage is a simple role/content pair for use with the native chat template.
+// ChatMessage is a simple role/content pair passed to ApplyChatTemplate.
+// Role values are "system", "user", or "assistant".
 type ChatMessage struct {
 	Role    string
 	Content string

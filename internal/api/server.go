@@ -1,4 +1,3 @@
-// Package api — HTTP server wiring.
 package api
 
 import (

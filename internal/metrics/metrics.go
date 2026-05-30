@@ -149,9 +149,13 @@ func StartUptimeTicker(ctx context.Context, startTime time.Time) {
 	}()
 }
 
-// InferenceOutcome constants match the `outcome` label values.
+// InferenceOutcome constants match the `outcome` label values used in
+// InferenceRequestsTotal. Use these instead of raw strings to avoid typos.
 const (
-	OutcomeSuccess   = "success"
-	OutcomeError     = "error"
+	// OutcomeSuccess labels requests that completed normally.
+	OutcomeSuccess = "success"
+	// OutcomeError labels requests that failed with an error.
+	OutcomeError = "error"
+	// OutcomeCancelled labels requests cancelled by the client.
 	OutcomeCancelled = "cancelled"
 )

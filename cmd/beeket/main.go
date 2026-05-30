@@ -1,4 +1,8 @@
-// beeket — the single Beeket binary: CLI client and model server.
+// Package main is the Beeket binary: it bundles the Beeket HTTP model server
+// and a CLI client into a single executable.
+//
+// Use "beeket serve" to start the server, and "beeket pull / list / run / ..." to
+// manage and query models.
 package main
 
 import (

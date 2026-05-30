@@ -1,4 +1,6 @@
-// Package tools provides helpers for tool calling (function calling) support.
+// Package tools provides helpers for tool calling (function calling) support:
+// grammar synthesis (BuildGrammar), output parsing (ParseToolCall), and
+// prompt rendering (RenderToolPreface, RewriteToolMessages).
 package tools
 
 // ToolFunction describes the callable function inside a tool definition.

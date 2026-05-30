@@ -148,6 +148,8 @@ func resolveDataDir(cfg *Config) string {
 	return defaultDataDir()
 }
 
+// ApplyEnv overlays environment variables (BEEKET_*) onto cfg.
+// It is called after loading the config file so env vars take precedence.
 func ApplyEnv(cfg *Config) {
 	if v := os.Getenv("BEEKET_HOST"); v != "" {
 		cfg.Server.Host = v

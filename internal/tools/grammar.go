@@ -1,5 +1,3 @@
-// Package tools provides helpers for tool calling (function calling) support:
-// grammar synthesis, output parsing, and prompt rendering.
 package tools
 
 import (
