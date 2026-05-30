@@ -398,19 +398,34 @@ type EmbedSession struct {
 	nEmbd   int32
 }
 
+// maxEmbedContextSize caps the context window for embedding sessions.
+// Embedding models process one text at a time and do not need the large
+// contexts used for generation. Capping here prevents llama_new_context_with_model
+// from failing with OOM on small embedding models (e.g. nomic-embed-text 80 MB)
+// when the server is configured with a large generation context (default 4096).
+const maxEmbedContextSize uint32 = 512
+
 // NewEmbedSession creates a dedicated context for embedding extraction.
 // The context has Embeddings=1 and PoolingType=Mean set so that a single
 // Encode call produces a pooled sequence vector.
+//
+// The effective context size is capped at maxEmbedContextSize (512) regardless
+// of the server-wide contextSize — embedding models only need a short window.
 func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSession, error) {
+	embedCtxSize := contextSize
+	if embedCtxSize > maxEmbedContextSize {
+		embedCtxSize = maxEmbedContextSize
+	}
+
 	cp := llama.ContextDefaultParams()
-	cp.NCtx = contextSize
-	cp.NBatch = contextSize // embed entire sequence in one batch
-	cp.NUbatch = contextSize
+	cp.NCtx = embedCtxSize
+	cp.NBatch = embedCtxSize // embed entire sequence in one batch
+	cp.NUbatch = embedCtxSize
 	cp.Embeddings = 1
-	cp.PoolingType = llama.PoolingTypeMean // fallback; model default takes precedence
+	cp.PoolingType = llama.PoolingTypeMean // correct for BERT-style models (nomic, bge, all-minilm)
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
-		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=mean): %w — try reducing --ctx-size if this fails", contextSize, err)
+		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=mean): %w — try reducing --context-size if this fails", embedCtxSize, err)
 	}
 	// Ensure the context is in embedding mode (belt-and-suspenders).
 	llama.SetEmbeddings(ctx, true)
