@@ -533,10 +533,6 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		opts.Grammar = grammarStr
 		opts.GrammarLazy = []string{lazyTrigger}
-	} else if chatGrammarStr != "" {
-		// Grammar constraint intentionally NOT set — see Generate handler comment.
-		// The noThinkWithJSON system prompt guides the model to output JSON;
-		// post-generation schema validation (HTTP 422) catches any mismatch.
 	}
 
 	start := time.Now()
