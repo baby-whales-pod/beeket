@@ -293,32 +293,34 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmtErr.Error())
 		return
 	}
-	if grammarStr != "" {
-		opts.GrammarStr = grammarStr
-	}
+	// Grammar constraint is intentionally NOT set on opts.GrammarStr.
+	// llama.cpp's GGML_ABORT (triggered when the grammar eliminates all token
+	// candidates) sends SIGABRT which cannot be caught by Go's recover().
+	// Instead we rely on the system-prompt injection (noThinkWithJSON) to guide
+	// the model, and validate the response against the schema after generation.
 
 	// Suppress thinking mode when structured output is requested or think:false.
-	// For Generate, thinking suppression is handled via the System field.
+	// Per Qwen3 docs: /no_think must be appended to the user (prompt) content.
+	// For structured output we also inject a JSON-only system instruction.
 	needNoThinkGen := (grammarStr != "") || (req.Think != nil && !*req.Think)
 	systemMsg := req.System
-	if needNoThinkGen {
+	if needNoThinkGen && grammarStr != "" {
+		// Structured output: JSON-only instruction in system, /no_think in prompt.
 		if systemMsg == "" {
-			if grammarStr != "" {
-				systemMsg = noThinkWithJSON
-			} else {
-				systemMsg = noThinkOnly
-			}
+			systemMsg = jsonSystemPrompt
 		} else {
-			if grammarStr != "" {
-				systemMsg = noThinkWithJSON + "\n" + systemMsg
-			} else {
-				systemMsg = noThinkOnly + "\n" + systemMsg
-			}
+			systemMsg = jsonSystemPrompt + "\n" + systemMsg
 		}
+	}
+	if needNoThinkGen {
 		opts.StopStrings = append(opts.StopStrings, "</think>")
 	}
 
 	prompt := req.Prompt
+	if needNoThinkGen {
+		// Append /no_think to user prompt (Qwen3 docs requirement).
+		prompt = prompt + " " + noThinkOnly
+	}
 	if systemMsg != "" {
 		prompt = systemMsg + "\n\n" + prompt
 	}
@@ -532,9 +534,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		opts.Grammar = grammarStr
 		opts.GrammarLazy = []string{lazyTrigger}
 	} else if chatGrammarStr != "" {
-		// Eager grammar: active from token 0, forces model to start with '{'.
-		// See Generate handler comment for why the lazy trigger is not used here.
-		opts.GrammarStr = chatGrammarStr
+		// Grammar constraint intentionally NOT set — see Generate handler comment.
+		// The noThinkWithJSON system prompt guides the model to output JSON;
+		// post-generation schema validation (HTTP 422) catches any mismatch.
 	}
 
 	start := time.Now()
@@ -886,51 +888,61 @@ func resolveFormat(format any) (grammar string, schema map[string]any, err error
 	}
 }
 
-// noThinkOnly is injected when thinking must be suppressed but no JSON output is required.
-// "/no_think" is the Qwen3/QwQ control token that disables chain-of-thought output.
+// noThinkOnly is the Qwen3/QwQ thinking-suppression control token.
+// Per Qwen3 docs, it must be appended to the last USER message, not the system message.
 const noThinkOnly = "/no_think"
 
-// noThinkWithJSON extends noThinkOnly with a JSON-output instruction for structured output.
-const noThinkWithJSON = "/no_think\nYou must respond ONLY with valid JSON. No explanations, no reasoning, no prose."
+// jsonSystemPrompt is the system message injected for structured output requests.
+// Separated from noThinkOnly because /no_think must go in the user turn.
+const jsonSystemPrompt = "You are a JSON extraction API. Respond ONLY with a valid JSON object matching the requested schema. No explanations, no markdown, no text before or after the JSON."
 
-// injectNoThink prepends a thinking-suppression prefix to the system message in msgs
-// (or inserts a new system message at the front).
+// injectNoThink suppresses thinking-model chain-of-thought and, when withJSON
+// is true, also injects a JSON-only system prompt.
 //
-// When withJSON is true (structured output requested), the prefix also instructs
-// the model to respond with JSON only. When false (think:false without format),
-// only the bare /no_think token is injected.
+// Per official Qwen3 documentation, the /no_think control token must be
+// APPENDED TO THE LAST USER MESSAGE, not placed in the system message:
+//   "Extract name and age: John Smith is 42. /no_think"
 //
-// It also adds "</think>" to opts.StopStrings as a safety net: if the model
-// still emits a thinking block despite /no_think, generation stops before any
-// post-think prose can appear.
+// When withJSON is true, a JSON-only instruction is added as a system message
+// (separate from /no_think since it does not need to be in the user turn).
+//
+// A "</think>" stop string is added as a safety net so generation halts
+// immediately if the model emits a thinking block despite /no_think.
 func injectNoThink(msgs []Message, opts *engine.GenerateOptions, withJSON bool) []Message {
-	prefix := noThinkOnly
-	if withJSON {
-		prefix = noThinkWithJSON
-	}
-
 	result := make([]Message, len(msgs))
 	copy(result, msgs)
 
-	found := false
-	for i, m := range result {
-		if m.Role == "system" {
-			result[i].Content = prefix + "\n" + m.Content
-			found = true
+	// Append /no_think to the last user message (Qwen3 docs requirement).
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Role == "user" {
+			result[i].Content = result[i].Content + " " + noThinkOnly
 			break
 		}
 	}
-	if !found {
-		newMsgs := make([]Message, 0, len(result)+1)
-		newMsgs = append(newMsgs, Message{Role: "system", Content: prefix})
-		newMsgs = append(newMsgs, result...)
-		result = newMsgs
+
+	// For structured output: inject a JSON-only system prompt.
+	if withJSON {
+		// Prepend to existing system message, or insert a new one at the front.
+		found := false
+		for i, m := range result {
+			if m.Role == "system" {
+				result[i].Content = jsonSystemPrompt + "\n" + m.Content
+				found = true
+				break
+			}
+		}
+		if !found {
+			newMsgs := make([]Message, 0, len(result)+1)
+			newMsgs = append(newMsgs, Message{Role: "system", Content: jsonSystemPrompt})
+			newMsgs = append(newMsgs, result...)
+			result = newMsgs
+		}
 	}
 
-	// Safety net: stop generation at </think> in case the model still emits it.
+	// Safety net: stop generation at </think>.
 	for _, s := range opts.StopStrings {
 		if s == "</think>" {
-			return result // already present
+			return result
 		}
 	}
 	opts.StopStrings = append(opts.StopStrings, "</think>")
