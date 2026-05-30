@@ -400,22 +400,20 @@ type EmbedSession struct {
 
 // NewEmbedSession creates a dedicated context for embedding extraction.
 //
-// Design follows yzma's canonical encoder pattern (pkg/llama/context_test.go
-// TestEncode and examples/embeddings/main.go):
+// Design follows yzma's canonical embeddings example (examples/embeddings/main.go):
 //
 //   - NCtx=0: llama.cpp reads n_ctx_train from GGUF (required for BERT/encoder models).
-//   - Embeddings=1 set at params time (not post-init).
-//   - PoolingTypeUnspecified (-1): llama.cpp reads pooling from GGUF metadata,
-//     so nomic-embed-text (CLS=2), bge (Mean=1), e5-mistral (Last=3) all work.
+//   - Embeddings=1 set at params time.
+//   - PoolingTypeMean: matches the yzma example default. The actual pooling
+//     used at inference time is read from the GGUF via GetPoolingType after init,
+//     so this only affects models that don't embed a pooling preference.
 //   - NUbatch is NOT overridden: ContextDefaultParams returns NBatch=2048,
-//     NUbatch=512 which satisfies NBatch % NUbatch == 0. Setting NUbatch < NBatch
-//     without matching NBatch causes graph reservation to fail (returns NULL) on
-//     BERT-style encoder models — this was the root cause of all prior failures.
+//     NUbatch=512 which satisfies NBatch % NUbatch == 0.
 func (e *Engine) NewEmbedSession(model *Model, _ uint32) (*EmbedSession, error) {
 	cp := llama.ContextDefaultParams()
 	cp.NCtx = 0 // 0 → llama.cpp reads n_ctx_train from GGUF
 	cp.Embeddings = 1
-	cp.PoolingType = llama.PoolingTypeUnspecified
+	cp.PoolingType = llama.PoolingTypeMean // yzma example default; overridden by GGUF metadata at runtime
 	// NBatch and NUbatch intentionally left at defaults (2048 and 512).
 	// Do not touch NUbatch independently: it must satisfy NBatch % NUbatch == 0.
 	ctx, err := llama.InitFromModel(model.handle, cp)
@@ -460,14 +458,19 @@ func (s *EmbedSession) Embed(ctx context.Context, text string) ([]float32, int, 
 
 	batch := llama.BatchGetOne(tokens)
 
-	// Encoder-only models (BERT, nomic-embed-text) use Encode.
-	// Decoder models with Embeddings=1 use Decode. Try Encode first,
-	// logging the error before falling back so it's visible in debug logs.
-	if _, err := llama.Encode(s.ctx, batch); err != nil {
-		slog.Debug("embed: Encode failed, falling back to Decode", "err", err)
-		if _, err2 := llama.Decode(s.ctx, batch); err2 != nil {
-			return nil, len(tokens), fmt.Errorf("engine: embed: both Encode and Decode failed: %w", err2)
-		}
+	// Use architecture-aware encode/decode (yzma v1.13.0 exposes ModelHasEncoder):
+	// - BERT encoder-only models (nomic-embed-text, bge): llama_encode
+	// - Decoder-only models (Llama, Gemma, Qwen): llama_decode
+	// Replaces the prior try-Encode/fallback-to-Decode approach which could
+	// silently produce wrong results on decoder models.
+	var embedErr error
+	if llama.ModelHasEncoder(s.model.handle) {
+		_, embedErr = llama.Encode(s.ctx, batch)
+	} else {
+		_, embedErr = llama.Decode(s.ctx, batch)
+	}
+	if embedErr != nil {
+		return nil, len(tokens), fmt.Errorf("engine: embed encode/decode: %w", embedErr)
 	}
 
 	var raw []float32
