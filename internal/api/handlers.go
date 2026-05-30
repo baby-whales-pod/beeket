@@ -483,13 +483,22 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		// withJSON=true only when structured output is requested, not for bare think:false.
 		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, chatGrammarStr != "")
 	}
-	// When tools are active, also suppress thinking mode.
-	// Thinking models (Qwen3, QwQ) generate <think>...</think> blocks that
-	// confuse the lazy grammar trigger: if { appears inside a thinking block,
-	// the tool-call grammar activates mid-thought and produces 0 valid tokens.
-	// injectNoThink's HasSuffix guard prevents double /no_think if needNoThink was also true.
+	// When tools are active, append /no_think to the last user message to suppress
+	// the thinking preamble on Qwen3/QwQ models. We do NOT add </think> to stop
+	// strings here — the model must be able to close its <think></think> block and
+	// then proceed to generate the tool call JSON. Adding </think> as a stop string
+	// would halt generation immediately after the empty think block, before any
+	// tool call is produced.
+	// injectNoThink's HasSuffix guard prevents double /no_think injection.
 	if hasTools {
-		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, false) // withJSON=false; /no_think only
+		for i := len(effectiveMsgs) - 1; i >= 0; i-- {
+			if effectiveMsgs[i].Role == "user" {
+				if !strings.HasSuffix(strings.TrimSpace(effectiveMsgs[i].Content), noThinkOnly) {
+					effectiveMsgs[i].Content += " " + noThinkOnly
+				}
+				break
+			}
+		}
 	}
 
 	// Build the message list for the engine's native chat template.
