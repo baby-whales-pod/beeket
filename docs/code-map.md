@@ -206,13 +206,12 @@ Client
   ▼
 api.Handler.Chat()                         handlers.go:389
   │  resolve model name/tag via mgr.Resolve()
-  │  detect /no_think prefix → injectNoThink()    handlers.go:948
-  │     └─ appends enable_thinking=false to native template messages
-  │  if tools present → tools.BuildGrammar()      grammar.go:27
-  │     └─ returns GBNF grammar + lazy trigger "\{"
+  │  detect think:false / /no_think → injectNoThink()    handlers.go:948
+  │     └─ appends literal ` /no_think` token to last user message content
+  │        (Qwen3 recognizes this token to suppress <think> blocks)
+  │        + adds "</think>" safety-net stop string
   │  build engine.GenerateOptions {
   │     Messages: native ChatMessage slice,
-  │     Grammar: <gbnf>,  GrammarLazy: ["\{"],
   │     StopStrings, MaxTokens, Sampler, … }
   │  sched.Generate(name, tag, prompt="", opts)    scheduler.go:107
   ▼
@@ -223,10 +222,10 @@ scheduler.Scheduler.getOrLoadWorker()             scheduler.go:137
   ▼
 Worker.run() ← request enqueued to reqCh
   │  session.Generate(ctx, "", opts, out)           engine.go:277
-  │    if opts.Messages non-nil →
+  │    opts.Messages non-nil →
   │      session.ApplyChatTemplate(llamaMsgs)       engine.go:596
   │      → llama.ChatApplyTemplate() → prompt string
-  │    build per-request sampler with lazy grammar  engine.go:518
+  │    build per-request sampler (no grammar)       engine.go:163
   │    tokenise prompt → llama.Tokenize()
   │    decode loop:
   │      llama.Decode() → sample token
@@ -245,21 +244,27 @@ Client
   ▼
 api.Handler.Chat()                                 handlers.go:389
   │  resolveFormat(req.Format)                     handlers.go:910
-  │    if map → JSONGrammar + capture schema
-  │    if "json" string → JSONGrammar, no schema
+  │    if map → capture schema (grammar NOT applied in Chat)
+  │    if "json" string → no schema
   │  injectNoThink() with withJSON=true            handlers.go:948
-  │    → prepends JSON system prompt               handlers.go:933
-  │  GenerateOptions.Grammar = JSONGrammar
-  │  GenerateOptions.GrammarLazy = ["\{"]
+  │    ① appends literal ` /no_think` to last user message
+  │    ② injects JSON-only system prompt            handlers.go:933
+  │    ③ adds "</think>" safety-net stop string
+  │  No grammar constraint — prompt-only approach
+  │    (Grammar removed: SIGABRT from multi-char token {" issue;
+  │     lazy trigger fires mid-token → 0 valid candidates → GGML_ABORT)
+  │  opts.StopStrings += ["</think>", "<|im_end|>", "<|im_start|>"]
+  │  opts.Messages = engMsgs  (engine calls ApplyChatTemplate)
   ▼
-session.Generate()                                 engine.go:277
-  │  buildSamplerWithGrammar(lazy=["\{"])          engine.go:518
-  │    grammar activates only after first "{" token
-  │  decode loop → produces valid JSON tokens
+scheduler.Generate() → session.Generate()          engine.go:277
+  │  opts.GrammarStr = ""  (empty — prompt guides JSON output)
+  │  model outputs JSON guided by system prompt + /no_think
   ▼
 handler collects full response string
+  │  strip trailing stop string from output
   │  if schema provided → jsongrammar.ValidateSchema()  jsongrammar.go:46
-  │    fails → returns 500 (schema mismatch)
+  │    ├─ Valid   → HTTP 200, response.message.content = JSON
+  │    └─ Invalid → HTTP 422 (UnprocessableEntity)
   └─ write ChatResponse with JSON content
 ```
 
@@ -270,28 +275,36 @@ Client
   │  POST /api/chat  { model, messages, tools: […] }
   ▼
 api.Handler.Chat()                                 handlers.go:389
-  │  tools.BuildGrammar(req.Tools)                 grammar.go:27
-  │    emits GBNF with per-tool arg schemas
-  │    returns grammar + lazyTrigger="\{"
-  │  tools.RenderToolPreface(req.Tools)            prompt.go:16
-  │    builds system preamble listing tool names / params
-  │  tools.RewriteToolMessages(messages)           prompt.go:45
-  │    converts role="tool" → role="user" wrappers
-  │  GenerateOptions.Grammar = <gbnf>
-  │  GenerateOptions.GrammarLazy = ["\{"]
+  │  ① tools.RewriteToolMessages(messages)         prompt.go:45
+  │       converts role="tool" → role="user" wrappers
+  │  ② tools.RenderToolPreface(req.Tools)          prompt.go:16
+  │       injects tool definitions into system message
+  │       (prepended to existing system msg or inserted as new one)
+  │  ③ appends ` /no_think` to last user message   handlers.go:~520
+  │       (suppresses <think> preamble on Qwen3/QwQ models;
+  │        NOT added to stop strings — model must close </think>
+  │        before generating the tool call JSON)
+  │  ④ No grammar constraint — prompt-only approach
+  │       (SamplerInitGrammarLazyPatterns removed: lazy trigger fires
+  │        on multi-char token like {" → 0 valid candidates → SIGABRT)
+  │  opts.StopStrings += ["<|im_end|>"]
+  │  opts.GrammarStr = ""  (empty)
+  │  stream forced to false (tool calls always buffered)
+  │  prompt = chatPrompt(effectiveMsgs)  (pre-built, no ApplyChatTemplate)
   ▼
-session.Generate()  (lazy grammar: fires on "{")   engine.go:277
-  │  model may emit prose, then tool JSON object
+scheduler.Generate() → session.Generate()          engine.go:277
+  │  model generates tool call JSON guided by preface prompt
   ▼
-handler collects full output string
+handler collects full buffered output
   │  tools.ParseToolCall(output)                   parse.go:15
   │    scans for first balanced JSON matching
   │    {"name": "…", "arguments": {…}}
   │  if found:
-  │    tools.CleanOutput(output, tc)               parse.go:86
   │    ChatResponse.Message.ToolCalls = [ToolCall]
-  │    ChatResponse.Message.Content   = prose only
-  └─ write ChatResponse (tool call populated)
+  │    done_reason = "tool_calls"
+  │  if not found:
+  │    fall through → return as plain content
+  └─ write ChatResponse (done=true)
 ```
 
 ### 6d. Embedding
