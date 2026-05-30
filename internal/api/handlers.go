@@ -522,6 +522,12 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	opts := buildGenerateOptions(req.Options)
 	// Merge any stop strings injected by injectNoThink (e.g. "</think>").
 	opts.StopStrings = append(opts.StopStrings, chatOpts.StopStrings...)
+	// For structured output: add model-specific end-of-turn tokens as stop strings
+	// to prevent the model from generating beyond the closing JSON brace.
+	// <|im_end|> is Qwen's end-of-turn token; <|im_start|> catches context leakage.
+	if chatGrammarStr != "" {
+		opts.StopStrings = append(opts.StopStrings, "<|im_end|>", "<|im_start|>")
+	}
 	// Only pass Messages to engine for non-tool requests.
 	// The tool-calling prompt is pre-built (buildChatPrompt + tool preface) and
 	// must not be overridden by engine.Generate's ApplyChatTemplate call, which
@@ -916,9 +922,12 @@ func injectNoThink(msgs []Message, opts *engine.GenerateOptions, withJSON bool) 
 	copy(result, msgs)
 
 	// Append /no_think to the last user message (Qwen3 docs requirement).
+	// Guard against double injection in case the caller already included it.
 	for i := len(result) - 1; i >= 0; i-- {
 		if result[i].Role == "user" {
-			result[i].Content = result[i].Content + " " + noThinkOnly
+			if !strings.HasSuffix(strings.TrimSpace(result[i].Content), noThinkOnly) {
+				result[i].Content = result[i].Content + " " + noThinkOnly
+			}
 			break
 		}
 	}
