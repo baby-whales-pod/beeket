@@ -10,7 +10,7 @@ set -euo pipefail
 
 BEEKET_HOST="${BEEKET_HOST:-127.0.0.1}"
 BEEKET_PORT="${BEEKET_PORT:-11435}"
-MODEL="${MODEL:-smollm2:135m}"
+MODEL="${MODEL:-qwen3.5-2b:q4_k_m}"
 
 BODY=$(jq -n --arg model "$MODEL" \
   --arg system "You are a helpful assistant that speaks like a pirate." \

@@ -16,7 +16,7 @@ if ! command -v jq > /dev/null 2>&1; then
 fi
 
 HOST="${BEEKET_HOST:-http://localhost:11434}"
-MODEL="${BEEKET_MODEL:-qwen2.5:0.5b}"
+MODEL="${MODEL:-qwen3.5-2b:q4_k_m}"
 
 echo "=== Step 1: Send user message with tool definition ==="
 
