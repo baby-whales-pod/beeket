@@ -901,7 +901,8 @@ const jsonSystemPrompt = "You are a JSON extraction API. Respond ONLY with a val
 //
 // Per official Qwen3 documentation, the /no_think control token must be
 // APPENDED TO THE LAST USER MESSAGE, not placed in the system message:
-//   "Extract name and age: John Smith is 42. /no_think"
+//
+//	"Extract name and age: John Smith is 42. /no_think"
 //
 // When withJSON is true, a JSON-only instruction is added as a system message
 // (separate from /no_think since it does not need to be in the user turn).
