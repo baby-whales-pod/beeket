@@ -398,52 +398,30 @@ type EmbedSession struct {
 	nEmbd   int32
 }
 
-// maxEmbedContextSize caps the context window for embedding sessions.
-// Embedding models process one text at a time and do not need the large
-// contexts used for generation. Capping here prevents llama_new_context_with_model
-// from failing with OOM on small embedding models (e.g. nomic-embed-text 80 MB)
-// when the server is configured with a large generation context (default 4096).
-const maxEmbedContextSize uint32 = 512
-
 // NewEmbedSession creates a dedicated context for embedding extraction.
-// The context uses PoolingTypeUnspecified so llama.cpp reads the pooling
-// type from the model's GGUF metadata. Embedding mode is enabled
-// post-init via SetEmbeddings.
 //
-// The effective context size is capped at maxEmbedContextSize (512) regardless
-// of the server-wide contextSize — embedding models only need a short window.
-func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSession, error) {
-	// For embedding contexts use the model's native context size (NCtx=0) so
-	// llama.cpp reads n_ctx_train from the model's GGUF metadata instead of
-	// being capped at 512. BERT-style encoder models (nomic-embed-text, bge)
-	// allocate their KV cache based on n_ctx_train; overriding with a smaller
-	// value can cause graph reservation to fail and llama_init_from_model to
-	// throw an exception (returning NULL via the catch block).
-	//
-	// NBatch / NUbatch are set to the user-visible cap (512) to bound the
-	// actual per-call batch size and memory, without constraining the context.
-	embedBatch := contextSize
-	if embedBatch > maxEmbedContextSize {
-		embedBatch = maxEmbedContextSize
-	}
-
+// Design follows yzma's canonical encoder pattern (pkg/llama/context_test.go
+// TestEncode and examples/embeddings/main.go):
+//
+//   - NCtx=0: llama.cpp reads n_ctx_train from GGUF (required for BERT/encoder models).
+//   - Embeddings=1 set at params time (not post-init).
+//   - PoolingTypeUnspecified (-1): llama.cpp reads pooling from GGUF metadata,
+//     so nomic-embed-text (CLS=2), bge (Mean=1), e5-mistral (Last=3) all work.
+//   - NUbatch is NOT overridden: ContextDefaultParams returns NBatch=2048,
+//     NUbatch=512 which satisfies NBatch % NUbatch == 0. Setting NUbatch < NBatch
+//     without matching NBatch causes graph reservation to fail (returns NULL) on
+//     BERT-style encoder models — this was the root cause of all prior failures.
+func (e *Engine) NewEmbedSession(model *Model, _ uint32) (*EmbedSession, error) {
 	cp := llama.ContextDefaultParams()
-	cp.NCtx = 0 // 0 → use model's n_ctx_train from GGUF metadata
-	cp.NBatch = embedBatch
-	cp.NUbatch = embedBatch
-	// PoolingTypeUnspecified lets llama.cpp read the pooling type from the
-	// model's GGUF metadata. Forcing a specific type caused context init
-	// failures for some models (e.g. nomic-embed-text-v1.5 embeds CLS pooling).
+	cp.NCtx = 0 // 0 → llama.cpp reads n_ctx_train from GGUF
+	cp.Embeddings = 1
 	cp.PoolingType = llama.PoolingTypeUnspecified
-	// Do not set cp.Embeddings=1 at params time — we enable it post-init via
-	// SetEmbeddings to avoid any conflict with the model's own init path.
+	// NBatch and NUbatch intentionally left at defaults (2048 and 512).
+	// Do not touch NUbatch independently: it must satisfy NBatch % NUbatch == 0.
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
-		return nil, fmt.Errorf("engine: init embed context (nCtx=model-default, nBatch=%d): %w", embedBatch, err)
+		return nil, fmt.Errorf("engine: init embed context: %w", err)
 	}
-	// Enable embedding output mode post-init. This is safe for all embedding
-	// model types and does not affect context creation success.
-	llama.SetEmbeddings(ctx, true)
 	return &EmbedSession{
 		model:   model,
 		ctx:     ctx,
