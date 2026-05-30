@@ -250,6 +250,17 @@ type GenerateOptions struct {
 	// GrammarLazy, when non-empty, activates lazy-trigger mode: the grammar
 	// only kicks in once one of these patterns is sampled (e.g. "\{").
 	GrammarLazy []string
+	// Messages, when non-nil, are applied via the model's native chat template
+	// (ApplyChatTemplate) instead of the pre-built prompt string. This allows
+	// thinking models (Qwen3, DeepSeek-R1) to receive their native template
+	// including the enable_thinking control variable.
+	Messages []ChatMessage
+}
+
+// ChatMessage is a simple role/content pair for use with the native chat template.
+type ChatMessage struct {
+	Role    string
+	Content string
 }
 
 // Generate tokenises prompt and streams generated text pieces to out.
@@ -264,6 +275,21 @@ type GenerateOptions struct {
 // The per-request sampler is freed after generation; the session sampler is
 // left unchanged.
 func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOptions, out func(piece string) error) error {
+	// If Messages are provided, build the prompt using the model's native chat
+	// template (which supports thinking-model control variables like enable_thinking).
+	// This is preferred over the pre-built chatml prompt for structured output.
+	if len(opts.Messages) > 0 {
+		var err error
+		llamaMsgs := make([]llama.ChatMessage, len(opts.Messages))
+		for i, m := range opts.Messages {
+			llamaMsgs[i] = llama.NewChatMessage(m.Role, m.Content)
+		}
+		prompt, err = s.ApplyChatTemplate(llamaMsgs)
+		if err != nil {
+			return fmt.Errorf("engine: apply chat template: %w", err)
+		}
+	}
+
 	tokens := llama.Tokenize(s.model.vocab, prompt, true, false)
 	batch := llama.BatchGetOne(tokens)
 
@@ -321,8 +347,13 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 		}
 		pos += batch.NTokens
 
-		token := llama.SamplerSample(activeSampler, s.ctx, -1)
-		llama.SamplerAccept(activeSampler, token)
+		token, sampleErr := safeSamplerSample(activeSampler, s.ctx)
+		if sampleErr != nil {
+			return fmt.Errorf("engine: grammar rejected all tokens (model likely generating non-JSON): %w", sampleErr)
+		}
+		if acceptErr := safeSamplerAccept(activeSampler, token); acceptErr != nil {
+			return fmt.Errorf("engine: grammar accept failed for token %d: %w", token, acceptErr)
+		}
 
 		if llama.VocabIsEOG(s.model.vocab, token) {
 			break
@@ -576,4 +607,27 @@ func (s *Session) ApplyChatTemplate(messages []llama.ChatMessage) (string, error
 		return "", fmt.Errorf("engine: chat template apply failed (code %d)", n)
 	}
 	return string(buf[:n]), nil
+}
+
+// safeSamplerSample calls llama.SamplerSample and recovers from the panic that
+// llama.cpp throws when the grammar constraint eliminates all token candidates
+// ("Unexpected empty grammar stack"). Returns a proper Go error instead.
+func safeSamplerSample(sampler llama.Sampler, ctx llama.Context) (tok llama.Token, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	return llama.SamplerSample(sampler, ctx, -1), nil
+}
+
+// safeSamplerAccept calls llama.SamplerAccept and recovers from grammar-stack panics.
+func safeSamplerAccept(sampler llama.Sampler, token llama.Token) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	llama.SamplerAccept(sampler, token)
+	return nil
 }
