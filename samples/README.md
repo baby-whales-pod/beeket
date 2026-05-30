@@ -67,6 +67,11 @@ MODEL=qwen3.5-2b:q4_k_m ./samples/chat-structured.sh
 Streaming version of `chat-structured.sh`. Assembles the streamed tokens and
 parses the final JSON with `jq`.
 
+Note: if the assembled response does not match the requested JSON Schema,
+the server returns an HTTP 422 error chunk at the end of the stream. The
+script detects and displays these error chunks on stderr rather than trying
+to parse them as content.
+
 ```bash
 ./samples/chat-structured-stream.sh
 ```
