@@ -389,7 +389,7 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	return nil
 }
 
-// EmbedSession is a llama.Context created with Embeddings=1 and PoolingTypeNone.
+// EmbedSession is a llama.Context with SetEmbeddings enabled post-init.
 // It must not be used for generation.
 type EmbedSession struct {
 	model   *Model
@@ -400,36 +400,28 @@ type EmbedSession struct {
 
 // NewEmbedSession creates a dedicated context for embedding extraction.
 //
-// Diagnostic finding (embed-test against nomic-embed-text on Metal, b9394):
+// Final confirmed pattern (embed-test against nomic-embed-text on Metal, b9394):
 //
-//   - llama.ModelHasEncoder() returns false for nomic-embed-text — llama.cpp
-//     treats it as a decoder model that happens to produce embeddings.
-//   - Only PoolingTypeNone (0) succeeds with Embeddings=1 for this model.
-//     PoolingTypeMean (1), PoolingTypeUnspecified (-1) and PoolingTypeCLS (2)
-//     all cause llama_init_from_model to throw and return NULL.
-//   - Embeddings=1 is still required in ContextParams.
-//
-// Design:
-//
-//   - NCtx=0: llama.cpp reads n_ctx_train from GGUF.
-//   - Embeddings=1: enable embedding output mode.
-//   - PoolingTypeNone (0): the only value confirmed to work via diagnostic.
-//   - NUbatch intentionally left at default (512); NBatch default 2048.
+//   - Use ContextDefaultParams() with ONLY NCtx=0 overridden.
+//     Setting cp.Embeddings=1 or cp.PoolingType at init time causes
+//     llama_init_from_model to fail for nomic-embed-text.
+//   - Call SetEmbeddings(ctx, true) AFTER successful context creation.
+//     This enables embedding output mode without breaking init.
+//   - Use Decode (not Encode) — ModelHasEncoder returns false.
+//   - Use GetEmbeddingsSeq(ctx, 0, nEmbd) — returns the 768-dim vector.
+//     GetEmbeddingsIth returns zeros for this model and must NOT be used.
 func (e *Engine) NewEmbedSession(model *Model, _ uint32) (*EmbedSession, error) {
 	cp := llama.ContextDefaultParams()
 	cp.NCtx = 0 // 0 → llama.cpp reads n_ctx_train from GGUF
-	cp.Embeddings = 1
-	// PoolingTypeNone (0) is the only value that successfully initialises the
-	// embedding context for nomic-embed-text on llama.cpp b9394 (Metal / CPU).
-	// PoolingTypeMean / PoolingTypeUnspecified / PoolingTypeCLS all cause
-	// llama_init_from_model to throw and return NULL on this model.
-	cp.PoolingType = llama.PoolingTypeNone
-	// NBatch and NUbatch intentionally left at defaults (2048 and 512).
-	// Do not touch NUbatch independently: it must satisfy NBatch % NUbatch == 0.
+	// Do NOT set cp.Embeddings or cp.PoolingType here — overriding these at
+	// init time causes llama_init_from_model to throw for nomic-embed-text.
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
 		return nil, fmt.Errorf("engine: init embed context: %w", err)
 	}
+	// Enable embedding output after init — this is safe and does not affect
+	// context creation success.
+	llama.SetEmbeddings(ctx, true)
 	return &EmbedSession{
 		model:   model,
 		ctx:     ctx,
@@ -468,38 +460,17 @@ func (s *EmbedSession) Embed(ctx context.Context, text string) ([]float32, int, 
 
 	batch := llama.BatchGetOne(tokens)
 
-	// Use architecture-aware encode/decode (yzma v1.13.0 exposes ModelHasEncoder):
-	// - BERT encoder-only models (nomic-embed-text, bge): llama_encode
-	// - Decoder-only models (Llama, Gemma, Qwen): llama_decode
-	// Replaces the prior try-Encode/fallback-to-Decode approach which could
-	// silently produce wrong results on decoder models.
-	var embedErr error
-	if llama.ModelHasEncoder(s.model.handle) {
-		_, embedErr = llama.Encode(s.ctx, batch)
-	} else {
-		_, embedErr = llama.Decode(s.ctx, batch)
-	}
-	if embedErr != nil {
-		return nil, len(tokens), fmt.Errorf("engine: embed encode/decode: %w", embedErr)
+	// Decode the batch. ModelHasEncoder returns false for nomic-embed-text;
+	// Decode is always correct for this decoder-style embedding model.
+	if _, err := llama.Decode(s.ctx, batch); err != nil {
+		return nil, len(tokens), fmt.Errorf("engine: embed decode: %w", err)
 	}
 
-	var raw []float32
-	// For decoder-style embedding models (ModelHasEncoder=false, PoolingTypeNone),
-	// embeddings are stored per-token; use GetEmbeddingsIth(lastToken).
-	// GetEmbeddingsSeq is tried first for true pooled encoder models but is known
-	// to return nil for nomic-embed-text even when the context reports PoolingTypeMean.
-	// Diagnostic: GetPoolingType may return Mean (1) even when initialized with None;
-	// always attempt GetEmbeddingsIth as the primary path, fall back to GetEmbeddingsSeq.
-	if v, err := llama.GetEmbeddingsIth(s.ctx, int32(len(tokens))-1, s.nEmbd); err == nil && len(v) > 0 {
-		raw = v
-	}
-	if raw == nil {
-		// Pooled fallback: one vector per sequence (seq_id 0).
-		if v, err := llama.GetEmbeddingsSeq(s.ctx, 0, s.nEmbd); err == nil && len(v) > 0 {
-			raw = v
-		}
-	}
-	if raw == nil {
+	// GetEmbeddingsSeq returns the pooled sequence embedding (confirmed by
+	// diagnostic: 768 non-zero values for nomic-embed-text).
+	// GetEmbeddingsIth returns zeros for this model and must NOT be used.
+	raw, seqErr := llama.GetEmbeddingsSeq(s.ctx, 0, s.nEmbd)
+	if seqErr != nil || len(raw) == 0 {
 		return nil, len(tokens), fmt.Errorf("engine: embed: no embedding returned (pooling=%v)", s.pooling)
 	}
 
