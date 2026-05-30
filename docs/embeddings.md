@@ -113,3 +113,13 @@ print(sum(x*y for x,y in zip(a,b)))
 - **No batched encoding in v0.1.** Multiple strings in `input` are encoded sequentially. A batched path (single decode with multiple sequence IDs) will be added later.
 - **Quality depends on the model.** Chat models technically produce embedding vectors but the quality is poor compared to dedicated embedding models.
 - The embedding worker uses a separate context (`Embeddings=1`, `PoolingType=mean`) from the generation worker for the same model. Both count against `--max-loaded-models`.
+
+## Troubleshooting
+
+### "failed to initialize model" error
+
+This usually means either:
+1. **Model not pulled**: run `beeket pull nomic-embed-text` first
+2. **Context size too large**: start the server with a smaller context: `beeket serve --context-size 512`
+
+The embedding context allocates memory proportional to `--context-size`. For embedding models, a small context (512–1024) is sufficient.
