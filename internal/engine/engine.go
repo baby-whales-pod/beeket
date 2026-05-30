@@ -413,28 +413,33 @@ const maxEmbedContextSize uint32 = 512
 // The effective context size is capped at maxEmbedContextSize (512) regardless
 // of the server-wide contextSize — embedding models only need a short window.
 func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSession, error) {
-	embedCtxSize := contextSize
-	if embedCtxSize > maxEmbedContextSize {
-		embedCtxSize = maxEmbedContextSize
+	// For embedding contexts use the model's native context size (NCtx=0) so
+	// llama.cpp reads n_ctx_train from the model's GGUF metadata instead of
+	// being capped at 512. BERT-style encoder models (nomic-embed-text, bge)
+	// allocate their KV cache based on n_ctx_train; overriding with a smaller
+	// value can cause graph reservation to fail and llama_init_from_model to
+	// throw an exception (returning NULL via the catch block).
+	//
+	// NBatch / NUbatch are set to the user-visible cap (512) to bound the
+	// actual per-call batch size and memory, without constraining the context.
+	embedBatch := contextSize
+	if embedBatch > maxEmbedContextSize {
+		embedBatch = maxEmbedContextSize
 	}
 
 	cp := llama.ContextDefaultParams()
-	cp.NCtx = embedCtxSize
-	cp.NBatch = embedCtxSize // embed entire sequence in one batch
-	cp.NUbatch = embedCtxSize
-	// Do NOT force cp.Embeddings=1 in ContextParams — some models (e.g.
-	// nomic-embed-text-v1.5) use GGUF-embedded metadata to set embedding mode,
-	// and overriding it at params time can cause llama_new_context_with_model
-	// to return NULL. We set embedding mode after successful context creation
-	// via SetEmbeddings instead.
-	//
-	// Use PoolingTypeUnspecified (-1) so llama.cpp reads the pooling type from
-	// the model's GGUF metadata. Forcing PoolingTypeMean caused context init
-	// failures for models that embed PoolingTypeCLS (e.g. nomic-embed-text-v1.5).
+	cp.NCtx = 0 // 0 → use model's n_ctx_train from GGUF metadata
+	cp.NBatch = embedBatch
+	cp.NUbatch = embedBatch
+	// PoolingTypeUnspecified lets llama.cpp read the pooling type from the
+	// model's GGUF metadata. Forcing a specific type caused context init
+	// failures for some models (e.g. nomic-embed-text-v1.5 embeds CLS pooling).
 	cp.PoolingType = llama.PoolingTypeUnspecified
+	// Do not set cp.Embeddings=1 at params time — we enable it post-init via
+	// SetEmbeddings to avoid any conflict with the model's own init path.
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
-		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=unspecified): %w — ensure the model supports embeddings and try reducing --context-size", embedCtxSize, err)
+		return nil, fmt.Errorf("engine: init embed context (nCtx=model-default, nBatch=%d): %w", embedBatch, err)
 	}
 	// Enable embedding output mode post-init. This is safe for all embedding
 	// model types and does not affect context creation success.
