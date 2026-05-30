@@ -389,7 +389,6 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	return nil
 }
 
-// EmbedSession is a llama.Context created with Embeddings=1 and a
 // EmbedSession is a llama.Context created with Embeddings=1 and PoolingTypeNone.
 // It must not be used for generation.
 type EmbedSession struct {
