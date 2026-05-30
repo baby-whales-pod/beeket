@@ -522,7 +522,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	opts := buildGenerateOptions(req.Options)
 	// Merge any stop strings injected by injectNoThink (e.g. "</think>").
 	opts.StopStrings = append(opts.StopStrings, chatOpts.StopStrings...)
-	opts.Messages = engMsgs
+	// Only pass Messages to engine for non-tool requests.
+	// The tool-calling prompt is pre-built (buildChatPrompt + tool preface) and
+	// must not be overridden by engine.Generate's ApplyChatTemplate call, which
+	// uses the model's native template without tool definitions.
+	if !hasTools {
+		opts.Messages = engMsgs
+	}
 
 	if hasTools {
 		// Tool calling: use Grammar+GrammarLazy (lazy trigger).
