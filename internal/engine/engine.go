@@ -428,7 +428,7 @@ func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSessio
 	}
 
 	cp := llama.ContextDefaultParams()
-	cp.NCtx = 0          // 0 → use model's n_ctx_train from GGUF metadata
+	cp.NCtx = 0 // 0 → use model's n_ctx_train from GGUF metadata
 	cp.NBatch = embedBatch
 	cp.NUbatch = embedBatch
 	// PoolingTypeUnspecified lets llama.cpp read the pooling type from the
