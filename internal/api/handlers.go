@@ -558,16 +558,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		opts.Messages = engMsgs
 	}
 
-	if hasTools {
-		// Tool calling: use Grammar+GrammarLazy (lazy trigger).
-		grammarStr, lazyTrigger, gErr := tools.BuildGrammar(toolsList)
-		if gErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid tool schema: "+gErr.Error())
-			return
-		}
-		opts.Grammar = grammarStr
-		opts.GrammarLazy = []string{lazyTrigger}
-	}
+	// Grammar constraint intentionally removed from tool calling.
+	// SamplerInitGrammarLazyPatterns causes the same SIGABRT as structured output:
+	// the lazy trigger fires on a multi-character token like {" (token 4754),
+	// the grammar activates mid-token, produces 0 valid candidates, and
+	// llama.cpp calls GGML_ABORT → SIGABRT (uncatchable by Go's recover).
+	// The tool preface prompt and /no_think injection are sufficient to guide
+	// the model to generate correctly-formatted tool calls.
 
 	start := time.Now()
 	nw := NewNDJSONWriter(w)

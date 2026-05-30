@@ -277,19 +277,21 @@ func TestChat_ToolsInjected_SystemPreface(t *testing.T) {
 	assert.Contains(t, capturedPrompt, "You have access to the following tools", "expected tool preface in prompt")
 }
 
-// TestChat_InvalidToolSchema_Returns400 verifies that when the tools slice
-// contains a schema that causes BuildGrammar to error (e.g. tool name
-// collision), the handler returns HTTP 400.
-func TestChat_InvalidToolSchema_Returns400(t *testing.T) {
+// TestChat_InvalidToolSchema_NoLongerReturns400 documents that invalid tool
+// schemas (e.g. duplicate tool names) no longer produce HTTP 400 because
+// BuildGrammar is no longer called. The model still receives the tool preface
+// and will simply not generate a call for unrecognised schemas.
+func TestChat_InvalidToolSchema_NoLongerReturns400(t *testing.T) {
 	sched := &fakeScheduler{
 		generateFn: func(ctx context.Context, name, tag, prompt string, opts engine.GenerateOptions, out func(string) error) error {
-			return nil // should not be reached
+			// No grammar set; model just generates freely.
+			return out("I cannot call that tool.")
 		},
 	}
 
 	h := newTestHandler(t, sched)
 
-	// Two tool names that sanitize to the same rule name.
+	// Two tool names that previously caused a BuildGrammar collision.
 	reqBody := ChatRequest{
 		Model:    "mymodel:latest",
 		Messages: []Message{{Role: "user", Content: "test"}},
@@ -304,7 +306,7 @@ func TestChat_InvalidToolSchema_Returns400(t *testing.T) {
 			{
 				Type: "function",
 				Function: ToolFunction{
-					Name:       "get_weather", // collision: sanitizes to "get-weather"
+					Name:       "get_weather",
 					Parameters: map[string]any{"type": "object", "properties": map[string]any{}},
 				},
 			},
@@ -318,14 +320,15 @@ func TestChat_InvalidToolSchema_Returns400(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Chat(w, req)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var errResp ErrorResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
-	assert.Contains(t, errResp.Error, "collision")
+	// Grammar is not used, so schema collisions no longer produce 400.
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// populated in GenerateOptions when tools are provided.
-func TestChat_GrammarIsSetWhenToolsPresent(t *testing.T) {
+// TestChat_NoGrammarWhenToolsPresent verifies that tool calls no longer set
+// Grammar/GrammarLazy on GenerateOptions. The GBNF lazy trigger caused SIGABRT
+// via GGML_ABORT when a multi-char token like {" (token 4754) fired the trigger.
+// Tool format is now guided by the prompt preface alone.
+func TestChat_NoGrammarWhenToolsPresent(t *testing.T) {
 	var capturedOpts engine.GenerateOptions
 	sched := &fakeScheduler{
 		generateFn: func(ctx context.Context, name, tag, prompt string, opts engine.GenerateOptions, out func(string) error) error {
@@ -357,6 +360,6 @@ func TestChat_GrammarIsSetWhenToolsPresent(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Chat(w, req)
 
-	assert.NotEmpty(t, capturedOpts.Grammar, "expected grammar to be set in options")
-	assert.NotEmpty(t, capturedOpts.GrammarLazy, "expected lazy grammar trigger to be set")
+	assert.Empty(t, capturedOpts.Grammar, "Grammar must NOT be set for tools (SIGABRT risk)")
+	assert.Empty(t, capturedOpts.GrammarLazy, "GrammarLazy must NOT be set for tools (SIGABRT risk)")
 }
