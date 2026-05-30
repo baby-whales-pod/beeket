@@ -10,8 +10,8 @@ Beeket est un serveur LLM local compatible [Ollama](https://ollama.com), écrit 
 Il expose une API REST qui permet aux clients de télécharger, gérer et exécuter des
 modèles au format GGUF, en utilisant [llama.cpp](https://github.com/ggml-org/llama.cpp)
 comme moteur d'inférence. La bibliothèque C++ llama.cpp est accessible via
-[Yzma](https://github.com/hybridgroup/yzma) (`hybridgroup/yzma`), un wrapper Go CGo
-léger qui expose l'API C de llama.cpp sans embarquer la bibliothèque partagée dans le binaire.
+[Yzma](https://github.com/hybridgroup/yzma) (`hybridgroup/yzma`), une enveloppe Go pure sans CGo (utilise `purego` et `jupiterrider/ffi` pour le chargement dynamique)
+qui expose l'API C de llama.cpp sans embarquer la bibliothèque partagée dans le binaire.
 
 Le dépôt produit un **binaire unique** (`beeket`) qui joue à la fois le rôle de serveur
 (`beeket serve`) et d'interface CLI de gestion (`beeket pull`, `list`, `show`, `rm`,
@@ -81,7 +81,7 @@ Préoccupations transversales :
   internal/metrics     — Middleware Prometheus + collecteurs sur chaque requête
   internal/config      — flags → variables d'env → config TOML, appliqués au démarrage
   internal/libinstall  — téléchargement optionnel de la bibliothèque partagée llama.cpp
-  internal/tools       — construction grammaire GBNF, injection prompt, parsing JSON
+  internal/tools       — injection prompt système, parsing JSON d'appels d'outils (BuildGrammar disponible mais non utilisé dans le chemin actuel)
   internal/jsongrammar — JSON GBNF canonique pour sortie structurée (format: "json")
   internal/download    — téléchargeur HTTPS repris (pull de modèles)
   internal/store       — blobs + manifests sur disque ($XDG_DATA_HOME/beeket)
@@ -101,7 +101,7 @@ Préoccupations transversales :
 | `internal/download` | `internal/download/` | `Get`, `Resolve`, `TmpFilename` | Téléchargeur HTTPS repris pour les blobs `.gguf`. Émet des callbacks de progression consommés par `api.Pull`. Résout les URLs raccourcies HuggingFace. |
 | `internal/store` | `internal/store/store.go` | `Store` | Store sur disque adressé par contenu. Gère les blobs, les manifests JSON, les suppressions. Seul package qui connaît la disposition sous `$XDG_DATA_HOME/beeket`. |
 | `internal/metrics` | `internal/metrics/` | `Middleware`, `Register`, `InferenceRequestsTotal`, `InferenceDuration` | Registre Prometheus : informations de build, uptime, compteurs de requêtes, histogrammes de latence, compteurs de débit en tokens, jauge de modèles chargés. Le middleware HTTP enveloppe chaque réponse. |
-| `internal/tools` | `internal/tools/` | `Tool`, `ToolCall`, `RenderToolPreface`, `RewriteToolMessages`, `ParseToolCall` | Pipeline d'appels d'outils : construit le préambule système à partir des schémas d'outils, réécrit les messages de rôle `tool`, parse la sortie JSON du modèle en structs `ToolCall`. |
+| `internal/tools` | `internal/tools/` | `Tool`, `ToolCall`, `RenderToolPreface`, `RewriteToolMessages`, `ParseToolCall` | Construit le préambule système à partir des schémas d'outils ; analyse le JSON d'appel d'outil depuis la sortie du modèle. Réécrit les messages de rôle `tool` pour la compatibilité du template. (`BuildGrammar` existe dans le package mais n'est pas appelé dans le chemin de handler actuel.) |
 | `internal/jsongrammar` | `internal/jsongrammar/jsongrammar.go` | `JSONGrammar`, `ValidateSchema` | Source de vérité unique pour la grammaire GBNF JSON canonique utilisée dans les requêtes `format: "json"`. Valide également le JSON de réponse contre un JSON Schema après génération. |
 | `internal/config` | `internal/config/config.go` | `Config`, `Load`, `ApplyEnv`, `Validate` | Schéma de configuration, chargeur TOML, surcouche de variables d'env (`BEEKET_*`), surcouche des flags CLI, validation et résolution des chemins XDG. Priorité : défauts → TOML → env → flags. |
 | `internal/libinstall` | `internal/libinstall/` | `Ensure`, `Options` | `--auto-install-lib` optionnel : détecte la plateforme/le backend (cpu/cuda/metal/vulkan/rocm) et télécharge la bibliothèque partagée llama.cpp correspondante via Yzma dans `lib-dir`. |
@@ -146,6 +146,7 @@ Préoccupations transversales :
    dans une map séparée pour ne pas déplacer les workers de génération.
 3. **`EmbedWorker.run`** transmet le texte à **`engine.EmbedSession.Embed`**, qui :
    - tokenise le texte avec `llama.Tokenize` ;
+   - après l'init du contexte, appelle `llama.SetEmbeddings(ctx, true)` pour activer le mode sortie d'embeddings ;
    - exécute `llama.Decode` sur le batch de tokens ;
    - lit le vecteur d'embedding poolé via `llama.GetEmbeddingsSeq` ;
    - copie le vecteur hors de la mémoire FFI et le normalise en L2.
@@ -403,7 +404,7 @@ présentés au modèle ou dont la réponse est interprétée.
 | **Backend** | Le backend d'accélération matérielle utilisé par llama.cpp : `cpu`, `cuda`, `metal`, `vulkan`, ou `rocm`. Sélectionné au démarrage ; `auto` laisse Yzma détecter la meilleure option disponible. |
 | **Pooling** | La stratégie utilisée pour agréger les embeddings par token en un vecteur unique pour une séquence. Beeket utilise `GetEmbeddingsSeq` (pooling de séquence) plutôt que des embeddings par token. |
 | **Normalisation L2** | Division d'un vecteur d'embedding par sa norme euclidienne (L2) afin que tous les vecteurs se trouvent sur la sphère unité. Permet de calculer la similarité cosinus comme un simple produit scalaire. |
-| **Yzma** | Le wrapper Go CGo (`hybridgroup/yzma`) utilisé par Beeket pour appeler l'API C de llama.cpp. Yzma charge la bibliothèque partagée à l'exécution via `llama.Load` plutôt que de la lier statiquement. |
+| **Yzma** | L'enveloppe Go pure sans CGo (`hybridgroup/yzma`, utilise `purego` et `jupiterrider/ffi`) utilisée par Beeket pour appeler l'API C de llama.cpp. Yzma charge la bibliothèque partagée à l'exécution via `llama.Load` plutôt que de la lier statiquement. |
 
 ---
 
