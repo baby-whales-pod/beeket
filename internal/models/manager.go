@@ -1,4 +1,3 @@
-// Package models manages the Beeket model registry: manifests, aliases, metadata.
 package models
 
 import (
@@ -11,16 +10,20 @@ import (
 )
 
 // Details holds metadata about a model extracted from its GGUF header.
+// Fields are populated during model pull and stored in the manifest.
 type Details struct {
 	Family            string `json:"family"`
 	ParameterSize     string `json:"parameter_size"`
 	QuantizationLevel string `json:"quantization_level"`
 	ContextLength     int    `json:"context_length"`
-	EmbeddingLength   int    `json:"embedding_length,omitempty"`
-	Format            string `json:"format"`
-	HasVision         bool   `json:"has_vision,omitempty"`
-	HasEmbeddings     bool   `json:"has_embeddings,omitempty"`
-	ChatTemplate      string `json:"chat_template,omitempty"`
+	// EmbeddingLength is non-zero only for embedding models.
+	EmbeddingLength int  `json:"embedding_length,omitempty"`
+	Format          string `json:"format"`
+	// HasVision is true when a vision projector (mmproj) is present.
+	HasVision bool `json:"has_vision,omitempty"`
+	// HasEmbeddings is true when the model produces embeddings rather than text.
+	HasEmbeddings bool   `json:"has_embeddings,omitempty"`
+	ChatTemplate  string `json:"chat_template,omitempty"`
 }
 
 // Manifest is the on-disk record for a pulled model.

@@ -66,9 +66,13 @@ type Scheduler struct {
 
 // Config holds Scheduler configuration.
 type Config struct {
-	MaxLoaded   int
-	KeepAlive   time.Duration
+	// MaxLoaded is the maximum number of models (generate + embed) kept in memory.
+	MaxLoaded int
+	// KeepAlive is how long an idle model stays loaded before eviction.
+	KeepAlive time.Duration
+	// ContextSize is the per-session context window (in tokens).
 	ContextSize uint32
+	// NumParallel is reserved for future parallel-sequence support.
 	NumParallel int
 	SamplerOpts engine.SamplerOptions
 }
@@ -286,8 +290,9 @@ func (s *Scheduler) LoadedModels() []LoadedInfo {
 	return out
 }
 
-// LoadedInfo describes a currently loaded model.
+// LoadedInfo describes a currently loaded model in the scheduler.
 type LoadedInfo struct {
+	// Name is the "name:tag" key.
 	Name     string
 	Size     int64
 	LastUsed time.Time

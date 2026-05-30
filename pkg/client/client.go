@@ -28,6 +28,7 @@ func New(baseURL string) *Client {
 
 // ---- Model types (mirrors internal/api types) ----
 
+// ModelDetails holds model metadata returned by the API.
 type ModelDetails struct {
 	Family            string `json:"family"`
 	ParameterSize     string `json:"parameter_size"`
@@ -36,6 +37,7 @@ type ModelDetails struct {
 	Format            string `json:"format"`
 }
 
+// ModelInfo is one item in the model list returned by List.
 type ModelInfo struct {
 	Name       string       `json:"name"`
 	Model      string       `json:"model"`
@@ -45,11 +47,13 @@ type ModelInfo struct {
 	Details    ModelDetails `json:"details"`
 }
 
+// ShowResponse is the payload returned by Show.
 type ShowResponse struct {
 	Name    string       `json:"name"`
 	Details ModelDetails `json:"details"`
 }
 
+// PSModel is one entry in the list of currently loaded models returned by PS.
 type PSModel struct {
 	Name     string    `json:"name"`
 	Size     int64     `json:"size"`
@@ -140,6 +144,7 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	}
 	return nil
 }
+// Generate streams generated text for a prompt, calling out for each piece.
 func (c *Client) Generate(ctx context.Context, model, prompt string, out func(piece string)) error {
 	body, _ := json.Marshal(map[string]any{"model": model, "prompt": prompt, "stream": true})
 	resp, err := c.post(ctx, "/api/generate", body)

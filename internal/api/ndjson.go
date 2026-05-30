@@ -1,4 +1,3 @@
-// ndjson.go — newline-delimited JSON writer for streaming responses.
 package api
 
 import (

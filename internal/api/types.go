@@ -1,4 +1,5 @@
-// Package api contains the Beeket HTTP API types (Ollama-compatible wire format).
+// Package api contains the Beeket HTTP API types, handlers, and server wiring
+// (Ollama-compatible wire format).
 package api
 
 import "time"
