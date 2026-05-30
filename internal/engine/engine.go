@@ -406,8 +406,9 @@ type EmbedSession struct {
 const maxEmbedContextSize uint32 = 512
 
 // NewEmbedSession creates a dedicated context for embedding extraction.
-// The context has Embeddings=1 and PoolingType=Mean set so that a single
-// Encode call produces a pooled sequence vector.
+// The context uses PoolingTypeUnspecified so llama.cpp reads the pooling
+// type from the model's GGUF metadata. Embedding mode is enabled
+// post-init via SetEmbeddings.
 //
 // The effective context size is capped at maxEmbedContextSize (512) regardless
 // of the server-wide contextSize — embedding models only need a short window.
@@ -421,13 +422,22 @@ func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSessio
 	cp.NCtx = embedCtxSize
 	cp.NBatch = embedCtxSize // embed entire sequence in one batch
 	cp.NUbatch = embedCtxSize
-	cp.Embeddings = 1
-	cp.PoolingType = llama.PoolingTypeMean // correct for BERT-style models (nomic, bge, all-minilm)
+	// Do NOT force cp.Embeddings=1 in ContextParams — some models (e.g.
+	// nomic-embed-text-v1.5) use GGUF-embedded metadata to set embedding mode,
+	// and overriding it at params time can cause llama_new_context_with_model
+	// to return NULL. We set embedding mode after successful context creation
+	// via SetEmbeddings instead.
+	//
+	// Use PoolingTypeUnspecified (-1) so llama.cpp reads the pooling type from
+	// the model's GGUF metadata. Forcing PoolingTypeMean caused context init
+	// failures for models that embed PoolingTypeCLS (e.g. nomic-embed-text-v1.5).
+	cp.PoolingType = llama.PoolingTypeUnspecified
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
-		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=mean): %w — try reducing --context-size if this fails", embedCtxSize, err)
+		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=unspecified): %w — ensure the model supports embeddings and try reducing --context-size", embedCtxSize, err)
 	}
-	// Ensure the context is in embedding mode (belt-and-suspenders).
+	// Enable embedding output mode post-init. This is safe for all embedding
+	// model types and does not affect context creation success.
 	llama.SetEmbeddings(ctx, true)
 	return &EmbedSession{
 		model:   model,
