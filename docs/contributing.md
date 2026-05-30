@@ -403,10 +403,23 @@ without coordinating with the maintainers.
 
 ### Tool-calling capable architectures
 
-Ensure the GBNF lazy-trigger token matches the model's tool-call open token.
-For Qwen-family models this is `<tool_call>`. See
-`internal/tools/grammar.go:BuildGrammar` (~line 27) for how the trigger is
-constructed and how to add a new architecture's trigger token.
+The GBNF lazy trigger is always `\{` (a literal `{` character) — defined in
+`internal/tools/grammar.go:BuildGrammar` (line 48: `return b.String(), "\\{", nil`).
+This triggers grammar-constrained sampling the moment the model starts generating
+any JSON object, regardless of model architecture.
+
+`ParseToolCall` (`internal/tools/parse.go`) scans the output for the first
+balanced JSON object matching `{"name": "...", "arguments": {...}}` — there
+is no XML-style `<tool_call>` envelope; the parser skips leading prose and
+works directly with the raw JSON.
+
+**Note:** grammar is currently **not** used for tool calls in the `Chat`
+handler. It was removed (PR #71) because `SamplerInitGrammarLazyPatterns`
+causes the same `SIGABRT` as structured output — the lazy trigger fires on a
+multi-character token like `{"` (token 4754), the grammar activates mid-token,
+produces zero valid candidates, and llama.cpp calls `GGML_ABORT`. The tool
+path is prompt-only: the tool preface and `/no_think` injection are sufficient
+to guide the model to produce correctly-structured JSON.
 
 ---
 
@@ -647,15 +660,16 @@ ignored there.
 **Symptom:** `tool_calls` is empty in the response even though the model is
 supposed to call a tool.
 
-**Cause:** the model did not emit the expected `<tool_call>…</tool_call>`
-envelope, or emitted markdown fences instead.
+**Cause:** the model did not emit the expected `{"name": ..., "arguments": ...}`
+JSON object, or emitted markdown fences / prose only.
 
 **Fix:** check that the model supports tool calling (Qwen2.5/Qwen3 family is
 well-tested). Inspect the raw output by temporarily logging `sb.String()` in
-the `Chat` handler. `tools.ParseToolCall` in `internal/tools/parse.go` only
-recognises the `<tool_call>` envelope; if your model uses a different format,
-update `RenderToolPreface` in `internal/tools/prompt.go` and `ParseToolCall`
-to match.
+the `Chat` handler. `tools.ParseToolCall` (`internal/tools/parse.go`) scans
+for the first balanced JSON object with `name` and `arguments` keys — it skips
+leading prose, so preamble text before the JSON is fine. If the model emits no
+JSON at all, check that the tool preface prompt from `RenderToolPreface`
+(`internal/tools/prompt.go`) is being injected correctly.
 
 ### 7. Embedding init failure — wrong context params
 
