@@ -500,6 +500,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Merge any stop strings injected by injectNoThink (e.g. "</think>").
 	opts.StopStrings = append(opts.StopStrings, chatOpts.StopStrings...)
 
+	// Pass effectiveMsgs to the engine so it can apply the model's native chat
+	// template (which correctly handles thinking-model control variables).
+	// This is more reliable than the hardcoded 'chatml' template in buildChatPrompt.
+	engMsgs := make([]engine.ChatMessage, len(effectiveMsgs))
+	for i, m := range effectiveMsgs {
+		engMsgs[i] = engine.ChatMessage{Role: m.Role, Content: m.Content}
+	}
+	opts.Messages = engMsgs
+
 	if hasTools {
 		// Tool calling: use Grammar+GrammarLazy (lazy trigger).
 		grammarStr, lazyTrigger, gErr := tools.BuildGrammar(toolsList)
