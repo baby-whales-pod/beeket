@@ -389,8 +389,8 @@ func (s *Session) Generate(ctx context.Context, prompt string, opts GenerateOpti
 	return nil
 }
 
-// EmbedSession is a llama.Context created with Embeddings=1 and a
-// non-None PoolingType. It must not be used for generation.
+// EmbedSession is a llama.Context created with Embeddings=1 and PoolingTypeNone.
+// It must not be used for generation.
 type EmbedSession struct {
 	model   *Model
 	ctx     llama.Context
@@ -400,20 +400,30 @@ type EmbedSession struct {
 
 // NewEmbedSession creates a dedicated context for embedding extraction.
 //
-// Design follows yzma's canonical embeddings example (examples/embeddings/main.go):
+// Diagnostic finding (embed-test against nomic-embed-text on Metal, b9394):
 //
-//   - NCtx=0: llama.cpp reads n_ctx_train from GGUF (required for BERT/encoder models).
-//   - Embeddings=1 set at params time.
-//   - PoolingTypeMean: matches the yzma example default. The actual pooling
-//     used at inference time is read from the GGUF via GetPoolingType after init,
-//     so this only affects models that don't embed a pooling preference.
-//   - NUbatch is NOT overridden: ContextDefaultParams returns NBatch=2048,
-//     NUbatch=512 which satisfies NBatch % NUbatch == 0.
+//   - llama.ModelHasEncoder() returns false for nomic-embed-text — llama.cpp
+//     treats it as a decoder model that happens to produce embeddings.
+//   - Only PoolingTypeNone (0) succeeds with Embeddings=1 for this model.
+//     PoolingTypeMean (1), PoolingTypeUnspecified (-1) and PoolingTypeCLS (2)
+//     all cause llama_init_from_model to throw and return NULL.
+//   - Embeddings=1 is still required in ContextParams.
+//
+// Design:
+//
+//   - NCtx=0: llama.cpp reads n_ctx_train from GGUF.
+//   - Embeddings=1: enable embedding output mode.
+//   - PoolingTypeNone (0): the only value confirmed to work via diagnostic.
+//   - NUbatch intentionally left at default (512); NBatch default 2048.
 func (e *Engine) NewEmbedSession(model *Model, _ uint32) (*EmbedSession, error) {
 	cp := llama.ContextDefaultParams()
 	cp.NCtx = 0 // 0 → llama.cpp reads n_ctx_train from GGUF
 	cp.Embeddings = 1
-	cp.PoolingType = llama.PoolingTypeMean // yzma example default; overridden by GGUF metadata at runtime
+	// PoolingTypeNone (0) is the only value that successfully initialises the
+	// embedding context for nomic-embed-text on llama.cpp b9394 (Metal / CPU).
+	// PoolingTypeMean / PoolingTypeUnspecified / PoolingTypeCLS all cause
+	// llama_init_from_model to throw and return NULL on this model.
+	cp.PoolingType = llama.PoolingTypeNone
 	// NBatch and NUbatch intentionally left at defaults (2048 and 512).
 	// Do not touch NUbatch independently: it must satisfy NBatch % NUbatch == 0.
 	ctx, err := llama.InitFromModel(model.handle, cp)
