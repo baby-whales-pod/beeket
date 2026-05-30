@@ -23,7 +23,7 @@ MODEL="${MODEL:-qwen3.5-0.8b:q4_k_m}"
 
 BODY=$(jq -n \
   --arg model   "$MODEL" \
-  --arg content "Extract the capital city and its country: Paris is the capital of France. /no_think" \
+  --arg content "Extract the capital city and its country: Paris is the capital of France." \
   --argjson format '{
     "type": "object",
     "properties": {
