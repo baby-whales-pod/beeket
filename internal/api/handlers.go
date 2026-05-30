@@ -475,12 +475,21 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// Suppress thinking mode when:
 	//   a) structured output is requested (format != nil), OR
 	//   b) the caller explicitly sets think:false.
+	//   c) tool calling is active (thinking confuses the lazy grammar trigger).
 	// Modifies effectiveMsgs, so must happen before h.chatPrompt().
 	needNoThink := (chatGrammarStr != "") || (req.Think != nil && !*req.Think)
 	var chatOpts engine.GenerateOptions // built below; passed by pointer to injectNoThink
 	if needNoThink {
 		// withJSON=true only when structured output is requested, not for bare think:false.
 		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, chatGrammarStr != "")
+	}
+	// When tools are active, also suppress thinking mode.
+	// Thinking models (Qwen3, QwQ) generate <think>...</think> blocks that
+	// confuse the lazy grammar trigger: if { appears inside a thinking block,
+	// the tool-call grammar activates mid-thought and produces 0 valid tokens.
+	// injectNoThink's HasSuffix guard prevents double /no_think if needNoThink was also true.
+	if hasTools {
+		effectiveMsgs = injectNoThink(effectiveMsgs, &chatOpts, false) // withJSON=false; /no_think only
 	}
 
 	// Build the message list for the engine's native chat template.
@@ -528,7 +537,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if chatGrammarStr != "" {
 		opts.StopStrings = append(opts.StopStrings, "<|im_end|>", "<|im_start|>")
 	}
-	// Only pass Messages to engine for non-tool requests.
+	// For tools: also add end-of-turn stop string to halt generation cleanly
+	// if the model finishes the tool call JSON before hitting nPredict.
+	if hasTools {
+		opts.StopStrings = append(opts.StopStrings, "<|im_end|>")
+	}
 	// The tool-calling prompt is pre-built (buildChatPrompt + tool preface) and
 	// must not be overridden by engine.Generate's ApplyChatTemplate call, which
 	// uses the model's native template without tool definitions.

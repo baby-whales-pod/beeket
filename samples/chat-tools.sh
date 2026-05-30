@@ -2,10 +2,11 @@
 # chat-tools.sh — demonstrates tool calling (function calling) in Beeket.
 #
 # Usage:
-#   BEEKET_HOST=http://localhost:11434 bash samples/chat-tools.sh
+#   ./samples/chat-tools.sh
+#   MODEL=qwen3.5-0.8b:q4_k_m BEEKET_HOST=192.168.1.10 ./samples/chat-tools.sh
 #
 # Requirements:
-#   - Beeket server running with a chat model loaded (e.g. qwen2.5:0.5b).
+#   - Beeket server running with a chat model loaded.
 #   - jq installed (required for building the JSON body safely).
 
 set -euo pipefail
@@ -15,8 +16,11 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 1
 fi
 
-HOST="${BEEKET_HOST:-http://localhost:11434}"
-MODEL="${MODEL:-qwen3.5-2b:q4_k_m}"
+BEEKET_HOST="${BEEKET_HOST:-127.0.0.1}"
+BEEKET_PORT="${BEEKET_PORT:-11435}"
+MODEL="${MODEL:-qwen3.5-0.8b:q4_k_m}"
+
+BASE_URL="http://${BEEKET_HOST}:${BEEKET_PORT}"
 
 echo "=== Step 1: Send user message with tool definition ==="
 
@@ -46,7 +50,7 @@ STEP1_BODY=$(jq -n \
     ]
   }')
 
-RESPONSE=$(curl -s "${HOST}/api/chat" \
+RESPONSE=$(curl -sS "${BASE_URL}/api/chat" \
   -H 'Content-Type: application/json' \
   -d "$STEP1_BODY")
 
@@ -98,7 +102,7 @@ STEP2_BODY=$(jq -n \
     ]
   }')
 
-RESPONSE2=$(curl -s "${HOST}/api/chat" \
+RESPONSE2=$(curl -sS "${BASE_URL}/api/chat" \
   -H 'Content-Type: application/json' \
   -d "$STEP2_BODY")
 
