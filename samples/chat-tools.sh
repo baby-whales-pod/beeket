@@ -18,7 +18,7 @@ fi
 
 BEEKET_HOST="${BEEKET_HOST:-127.0.0.1}"
 BEEKET_PORT="${BEEKET_PORT:-11435}"
-MODEL="${MODEL:-qwen3.5-0.8b:q4_k_m}"
+MODEL="${MODEL:-qwen3.5-4b:q4_k_m}"
 
 BASE_URL="http://${BEEKET_HOST}:${BEEKET_PORT}"
 
