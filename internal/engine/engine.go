@@ -410,7 +410,7 @@ func (e *Engine) NewEmbedSession(model *Model, contextSize uint32) (*EmbedSessio
 	cp.PoolingType = llama.PoolingTypeMean // fallback; model default takes precedence
 	ctx, err := llama.InitFromModel(model.handle, cp)
 	if err != nil {
-		return nil, fmt.Errorf("engine: init embed context: %w", err)
+		return nil, fmt.Errorf("engine: init embed context (nCtx=%d, pooling=mean): %w — try reducing --ctx-size if this fails", contextSize, err)
 	}
 	// Ensure the context is in embedding mode (belt-and-suspenders).
 	llama.SetEmbeddings(ctx, true)
